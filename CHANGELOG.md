@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+Maintenance release — no rule or behaviour changes; republished for the VS Code
+Marketplace.
+
 ## 1.0.0 — First stable release
 
 Salla Theme Reviewer checks a Twilight theme against the rules Salla's review team
