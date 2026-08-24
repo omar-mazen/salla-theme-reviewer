@@ -247,3 +247,14 @@ automatically every 7 days (`sallaReview.raedAutoUpdateDays`), or on demand via
 **Good to know:** a clean run is strong evidence, not a guarantee — Salla's reviewers also
 perform visual and store-configuration review that no static tool can replace. Twig
 *expressions* inside tags and hand-written fake statistics still need human eyes.
+
+---
+
+## Contact
+
+Built by **Omar Mazen**. Questions, bug reports, or a rejection reason the extension
+does not catch yet — reach out:
+
+- Email: omar.mazen.mohammed@gmail.com
+- LinkedIn: https://www.linkedin.com/in/omar-mazen/
+- GitHub: https://github.com/omar-mazen

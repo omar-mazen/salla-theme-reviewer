@@ -5,13 +5,13 @@ Maintainer notes — this file is excluded from the packaged extension.
 ## One-time setup
 
 1. **Create the publisher** at https://marketplace.visualstudio.com/manage
-   — sign in with a Microsoft account and create publisher id **`omar-mazen`**
+   — sign in with a Microsoft account and create publisher id **`omarmazen`**
    (must match `"publisher"` in package.json exactly; ids cannot contain spaces).
 2. **Create a Personal Access Token** at https://dev.azure.com
    (any organization) → User settings → Personal access tokens →
    *New Token* → Organization: **All accessible organizations**,
    Scopes: **Marketplace → Manage**.
-3. Log in once: `npx @vscode/vsce login omar-mazen` (paste the PAT).
+3. Log in once: `npx @vscode/vsce login omarmazen` (paste the PAT).
 
 ## Before each publish
 

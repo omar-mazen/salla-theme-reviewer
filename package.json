@@ -3,7 +3,7 @@
   "displayName": "Salla Theme Reviewer",
   "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
   "version": "1.0.0",
-  "publisher": "omar-mazen",
+  "publisher": "omarmazen",
   "license": "MIT",
   "engines": {
     "vscode": "^1.75.0"
@@ -321,7 +321,9 @@
     ]
   },
   "author": {
-    "name": "Omar Mazen"
+    "name": "Omar Mazen",
+    "email": "omar.mazen.mohammed@gmail.com",
+    "url": "https://www.linkedin.com/in/omar-mazen/"
   },
   "keywords": [
     "salla",
@@ -332,5 +334,9 @@
     "linter",
     "ecommerce",
     "arabic"
-  ]
+  ],
+  "bugs": {
+    "email": "omar.mazen.mohammed@gmail.com"
+  },
+  "homepage": "https://github.com/omar-mazen"
 }
