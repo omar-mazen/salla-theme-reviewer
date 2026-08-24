@@ -20,7 +20,8 @@
     "build-manifest": "node scripts/build-raed-manifest.js",
     "review": "node cli.js",
     "test": "node test/run.js",
-    "update-raed": "node scripts/update-raed-from-github.js"
+    "update-raed": "node scripts/update-raed-from-github.js",
+    "make-icon": "node scripts/make-icon.js"
   },
   "contributes": {
     "commands": [
@@ -338,5 +339,10 @@
   "bugs": {
     "email": "omar.mazen.mohammed@gmail.com"
   },
-  "homepage": "https://github.com/omar-mazen"
+  "homepage": "https://github.com/omar-mazen",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#102A38",
+    "theme": "dark"
+  }
 }
