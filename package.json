@@ -1,0 +1,336 @@
+{
+  "name": "salla-theme-reviewer",
+  "displayName": "Salla Theme Reviewer",
+  "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
+  "version": "1.0.0",
+  "publisher": "omar-mazen",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "workspaceContains:**/twilight.json"
+  ],
+  "scripts": {
+    "build-manifest": "node scripts/build-raed-manifest.js",
+    "review": "node cli.js",
+    "test": "node test/run.js",
+    "update-raed": "node scripts/update-raed-from-github.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "sallaReview.scan",
+        "category": "Salla Review",
+        "title": "Review Themes"
+      },
+      {
+        "command": "sallaReview.report",
+        "category": "Salla Review",
+        "title": "Generate Report"
+      },
+      {
+        "command": "sallaReview.setupCi",
+        "category": "Salla Review",
+        "title": "Setup Git & CI Checks"
+      },
+      {
+        "command": "sallaReview.editCustomRules",
+        "category": "Salla Review",
+        "title": "Edit Custom Rules"
+      },
+      {
+        "command": "sallaReview.updateRaed",
+        "category": "Salla Review",
+        "title": "Update Raed Reference"
+      },
+      {
+        "command": "sallaReview.clear",
+        "category": "Salla Review",
+        "title": "Clear Problems"
+      }
+    ],
+    "configuration": [
+      {
+        "title": "General",
+        "order": 1,
+        "properties": {
+          "sallaReview.runOnSave": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Re-analyze a file incrementally every time it is saved (~65ms — only the saved file is re-read; cross-file checks are recomputed from memory)."
+          },
+          "sallaReview.scanOnStartup": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Run a full review of every theme in the workspace automatically, shortly after the window opens."
+          },
+          "sallaReview.ignoredTexts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "scope": "resource",
+            "description": "Additional UI strings the hardcoded-text check should never report (case-insensitive, whitespace-normalized). Extends the built-in ignore list."
+          }
+        }
+      },
+      {
+        "title": "Scan Scope (Exclude)",
+        "order": 2,
+        "properties": {
+          "sallaReview.exclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "scope": "resource",
+            "markdownDescription": "**Exclude patterns** — matching files and folders are never analyzed (also applies to the merge-conflict scan of `public/` and to the theme-size estimate). Four forms: a folder path (`src/views/components/custom`), a glob (`src/**/*.min.js` — `*` stays within one folder, `**` crosses folders, `?` is one character), a bare name (`legacy` matches any folder or file with that name at any depth), or a regular expression wrapped in slashes (`/\\.min\\.js$/`), tested against the path relative to the theme root with forward slashes. Set per project in the theme's own `.vscode/settings.json`."
+          }
+        }
+      },
+      {
+        "title": "Checks",
+        "order": 3,
+        "properties": {
+          "sallaReview.checks.uiText": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report user-visible text written directly in Twig, JavaScript, or CSS instead of going through the translation system (trans() in Twig, salla.lang in JS). Covers multi-line markup, JS sinks such as innerHTML/alert/salla.notify, and CSS content properties. Salla rejects themes containing untranslated UI strings."
+          },
+          "sallaReview.checks.jsSyntax": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Compile every JavaScript file in-process (no external processes) and report clear syntax errors such as unclosed braces or malformed functions. Module-style files (import/export) are skipped."
+          },
+          "sallaReview.checks.cssBraces": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report unbalanced curly braces in CSS and SCSS files — an extra closing brace or a block left open breaks the whole stylesheet."
+          },
+          "sallaReview.checks.security": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report suspicious JavaScript behavior: network requests (fetch, XHR, sendBeacon, WebSocket, axios, and others) to domains outside salla.sa/salla.dev, direct document.cookie access, and storing keys that look sensitive (token, auth, password, ...) in localStorage or sessionStorage."
+          },
+          "sallaReview.checks.customCode": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report anything that lets the merchant inject raw code — an automatic rejection: twilight.json fields that accept custom JS/HTML/CSS, theme.settings.get() values printed inside <style> or <script>, and settings that load an external stylesheet dynamically."
+          },
+          "sallaReview.checks.misleadingUx": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report fake social-proof and urgency signals: Math.random() near viewer/buyer wording, and phrases Salla has explicitly rejected (live-viewer counters). Salla provides no real-time viewer or purchase data, so such claims mislead shoppers."
+          },
+          "sallaReview.checks.sliderSource": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report <salla-products-slider> components that build their source-value attribute manually with map()/join() in Twig instead of passing source, limit, and a json_encode'd source-value — the manual form bypasses the component's own API fetching (see theme-raed PR #581)."
+          },
+          "sallaReview.checks.themeSize": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Estimate the theme's compressed size (text files divided by 3 + binary files as-is; node_modules and .git excluded) and warn when it exceeds the 1 MB limit Salla applies to public themes."
+          },
+          "sallaReview.checks.twilightManifest": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Validate twilight.json structure: every field must have an id; ids may only contain letters, digits, hyphens, underscores, and dots; each component's path must point to an existing Twig file; settings defined but never read anywhere; theme.settings.get() calls that reference an undefined setting; and component fields never used inside their own component file."
+          },
+          "sallaReview.checks.cssVariables": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Cross-reference every CSS custom property across the whole theme — definitions in stylesheets, <style> blocks, inline style attributes, and JS setProperty() all count. Reports variables that are defined but never used, and var(--x) usages that no file defines. Platform-provided prefixes (--tw-, --swiper-, --salla-, --color-, --font-) are exempt."
+          },
+          "sallaReview.checks.colors": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report literal colors — HEX values and Tailwind palette classes such as text-red-500 — in Twig, JS, CSS, and SCSS. Brand colors should come from theme settings or CSS variables so merchants can customize them. Shown as Information (blue) because themes typically contain hundreds. SVG content and var(--x, #fff) fallbacks are not reported."
+          },
+          "sallaReview.checks.twilightVersion": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Compare the versions of @salla.sa/twilight, @salla.sa/twilight-components, and @salla.sa/twilight-tailwind-theme in package.json against the npm registry. Salla rejects submissions more than 5 releases behind the latest. Requires internet; results are cached for 6 hours and the check is silently skipped offline."
+          },
+          "sallaReview.checks.structure": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Verify the theme structure the way Salla's TwilightCI does: the public/ directory (built assets from npm run production) must exist and be non-empty in the repository."
+          }
+        }
+      },
+      {
+        "title": "Twig Checks",
+        "order": 4,
+        "properties": {
+          "sallaReview.checks.twigBlocks": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Verify that every paired Twig tag (if, for, block, macro, set, embed, and others) is properly opened and closed: an opener without its end tag, an end tag without an opener, and mismatched pairs (e.g. endfor closing an if) are all reported. Self-closing forms like {% set x = value %} and {% block title expr %} are recognized, and {% verbatim %} content is ignored."
+          },
+          "sallaReview.checks.twigDivision": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report division by a variable derived from the |length filter when nothing guards against an empty list — such a division throws DivisionByZeroError and blanks the page when the list is empty. Guarded forms using max(1, x) or an {% if x %} check are accepted."
+          },
+          "sallaReview.checks.mergeConflicts": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report unresolved Git merge-conflict markers (<<<<<<<, >>>>>>>) in any text file, including files under public/ — conflict markers have appeared in real rejected submissions."
+          }
+        }
+      },
+      {
+        "title": "Raed Reference Checks",
+        "order": 5,
+        "properties": {
+          "sallaReview.checks.scopes": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Verify the placement of the <salla-scopes> element: it must appear exactly once, in src/views/layouts/master.twig — not in header.twig, not duplicated, and not missing. Wrong placement is a documented rejection reason."
+          },
+          "sallaReview.checks.requiredHooks": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Verify the eight Twig hooks Salla requires in product/single.twig, product/index.twig, and page-single.twig (for example {% hook 'product.single.before_customer_reviews' %}). Missing hooks are a recurring rejection reason; the reference implementation is theme-raed PRs #930, #933, and #938."
+          },
+          "sallaReview.checks.requiredComponents": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Verify that the 15 Twilight components Salla requires (salla-user-menu, salla-cart-coupons, salla-edit-order-button, salla-next-order-coupon, and others) appear somewhere in the theme. Each finding names the component and the file where reference themes place it."
+          },
+          "sallaReview.checks.raedParity": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Add a section to the generated Markdown report comparing the theme against the official theme-raed reference: platform components, salla.* API usage, and watchElements keys present in Raed but missing from the theme. Informational — it never produces Problems-panel diagnostics."
+          },
+          "sallaReview.raedAutoUpdateDays": {
+            "type": "number",
+            "default": 7,
+            "scope": "window",
+            "description": "How often (in days) to refresh the Raed reference fingerprint from the SallaApp/theme-raed repository on GitHub. Raed is updated frequently, and Salla reviews against its latest state. Set 0 to disable; you can always update manually with the \"Salla Review: Update Raed Reference\" command."
+          }
+        }
+      },
+      {
+        "title": "Bundle Projects Only",
+        "order": 6,
+        "properties": {
+          "sallaReview.checks.bundle": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Checks that run only on component-bundle projects (folders with twilight-bundle.json), never on classic themes: fields declared multilanguage:true with no central localizedString/resolveText resolver (values may render as [object Object]), console.log left in production source, unsafeHTML usage, and a missing or empty dist/ build output."
+          },
+          "sallaReview.checks.viteConfig": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "For bundle projects that depend on Vite: report a missing vite.config.ts/js at the project root — without it the reviewer cannot run the project, which has caused real rejections."
+          }
+        }
+      },
+      {
+        "title": "Git & CI Checker",
+        "order": 7,
+        "properties": {
+          "sallaReview.ci.failOn": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning",
+              "any"
+            ],
+            "enumDescriptions": [
+              "Block only on error-severity findings (documented Salla rejection reasons) — recommended.",
+              "Block on errors and warnings.",
+              "Block on any finding, informational included (strictest)."
+            ],
+            "default": "error",
+            "scope": "resource",
+            "description": "Which finding level blocks commits, pushes, and the GitHub check. Applied to the generated hooks and workflow the next time you run \"Setup Git & CI Checks\"."
+          },
+          "sallaReview.ci.preCommitHook": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Generate the pre-commit git hook (fast local gate, ~0.5s, no network) when running \"Setup Git & CI Checks\"."
+          },
+          "sallaReview.ci.prePushHook": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Generate the pre-push git hook (full check including the npm package version check) when running \"Setup Git & CI Checks\"."
+          },
+          "sallaReview.ci.workflow": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Generate the GitHub Actions workflow (checks every push and pull request, posts inline annotations and a TwilightCI-style summary) when running \"Setup Git & CI Checks\"."
+          }
+        }
+      },
+      {
+        "title": "Custom Rules",
+        "order": 8,
+        "properties": {
+          "sallaReview.checks.customRules": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Apply the theme's own rules from its rules file. Define them when Salla introduces a review rule this extension does not cover yet — the editor, git hooks, and CI all enforce them like built-in checks. Use the \"Salla Review: Edit Custom Rules\" command to create the file with a documented template."
+          },
+          "sallaReview.customRulesFile": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "markdownDescription": "Path to the custom rules file, relative to the theme root. Leave empty for the default `salla-rules.json`."
+          }
+        }
+      }
+    ]
+  },
+  "author": {
+    "name": "Omar Mazen"
+  },
+  "keywords": [
+    "salla",
+    "twilight",
+    "theme",
+    "twig",
+    "review",
+    "linter",
+    "ecommerce",
+    "arabic"
+  ]
+}

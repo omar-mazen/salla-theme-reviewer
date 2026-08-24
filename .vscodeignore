@@ -1,0 +1,5 @@
+.vscode/**
+scripts/**
+test/**
+*.vsix
+PUBLISHING.md

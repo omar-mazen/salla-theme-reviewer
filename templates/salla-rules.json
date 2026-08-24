@@ -1,0 +1,45 @@
+{
+  // Custom review rules for this theme.
+  //
+  // Salla adds review rules faster than any extension can ship. Define them here
+  // and the editor, the git hooks, and CI all enforce them like built-in checks.
+  // Commit this file so your whole team shares the same rules.
+  //
+  // Fields — "id" plus one of "forbid" / "require" are required:
+  //   id           unique identifier, letters/digits/-/_/.
+  //   name         short title shown in the finding
+  //   message      what the developer should do
+  //   severity     "error" (blocks commits/CI) | "warning" | "info"   [default: warning]
+  //   files        which files to check: "src/views/**/*.twig", "src/**",
+  //                "pages/cart.twig", a bare folder name, or "/regex/"
+  //                [default: every scanned file]
+  //   forbid       regular expression — every match is reported
+  //   require      regular expression — must be present
+  //   scope        "file"  = every matching file must contain "require"
+  //                "theme" = at least one file must contain it   [default: file]
+  //   ignoreCase   true to match case-insensitively               [default: false]
+  //   skipComments false to also scan inside comments             [default: true]
+  //   docs         a link shown with the finding
+  //
+  // Delete the examples below and add your own.
+  "rules": [
+    {
+      "id": "example-forbid-inline-style",
+      "name": "No inline style attributes",
+      "message": "Use Tailwind classes or theme settings instead of style=\"…\"",
+      "severity": "warning",
+      "files": "src/views/**/*.twig",
+      "forbid": "style=\"[^\"]*(?:color|background)[^\"]*\""
+    },
+    {
+      "id": "example-require-component",
+      "name": "New Salla component is required",
+      "message": "Salla now requires <salla-example> somewhere in the theme",
+      "severity": "error",
+      "files": "src/views/**/*.twig",
+      "require": "<salla-example",
+      "scope": "theme",
+      "docs": "https://docs.salla.dev/"
+    }
+  ]
+}

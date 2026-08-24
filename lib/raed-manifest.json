@@ -1,0 +1,428 @@
+{
+  "source": "github:SallaApp/theme-raed",
+  "commit": "a50219c7c477c2a51652af657a49e12783e9b746",
+  "twig": {
+    "src/views/components/footer/footer.twig": [
+      "salla-apps-icons",
+      "salla-contacts",
+      "salla-menu",
+      "salla-modal",
+      "salla-payments",
+      "salla-social",
+      "salla-trust-badges"
+    ],
+    "src/views/components/header/header.twig": [
+      "salla-bullet-delivery-tag",
+      "salla-cart-summary",
+      "salla-contacts",
+      "salla-localization-modal",
+      "salla-menu",
+      "salla-search",
+      "salla-user-menu"
+    ],
+    "src/views/layouts/customer.twig": [
+      "salla-breadcrumb",
+      "salla-file-upload",
+      "salla-user-menu"
+    ],
+    "src/views/layouts/master.twig": [
+      "salla-add-product-toast",
+      "salla-login-modal",
+      "salla-offer-modal",
+      "salla-scopes",
+      "salla-search"
+    ],
+    "src/views/pages/blog/index.twig": [
+      "salla-breadcrumb",
+      "salla-infinite-scroll",
+      "salla-slider"
+    ],
+    "src/views/pages/blog/single.twig": [
+      "salla-breadcrumb",
+      "salla-comments"
+    ],
+    "src/views/pages/brands/index.twig": [
+      "salla-breadcrumb"
+    ],
+    "src/views/pages/brands/single.twig": [
+      "salla-breadcrumb",
+      "salla-products-list"
+    ],
+    "src/views/pages/cart.twig": [
+      "salla-breadcrumb",
+      "salla-cart-coupons",
+      "salla-cart-item-offers",
+      "salla-cart-summary-card",
+      "salla-conditional-offer",
+      "salla-gifting",
+      "salla-loyalty-panel",
+      "salla-offer",
+      "salla-quantity-input",
+      "salla-tiered-offer"
+    ],
+    "src/views/pages/customer/notifications.twig": [
+      "salla-notifications"
+    ],
+    "src/views/pages/customer/orders/index.twig": [
+      "salla-orders"
+    ],
+    "src/views/pages/customer/orders/single.twig": [
+      "salla-edit-order-button",
+      "salla-modal",
+      "salla-order-branch",
+      "salla-order-details",
+      "salla-order-totals-card",
+      "salla-rating-modal",
+      "salla-rating-stars",
+      "salla-review-order-item"
+    ],
+    "src/views/pages/customer/profile.twig": [
+      "salla-datetime-picker",
+      "salla-file-upload",
+      "salla-tel-input",
+      "salla-user-settings",
+      "salla-verify"
+    ],
+    "src/views/pages/customer/wallet.twig": [
+      "salla-wallet"
+    ],
+    "src/views/pages/customer/wishlist.twig": [
+      "salla-products-list"
+    ],
+    "src/views/pages/loyalty.twig": [
+      "salla-breadcrumb",
+      "salla-loyalty",
+      "salla-slider"
+    ],
+    "src/views/pages/page-single.twig": [
+      "salla-breadcrumb",
+      "salla-comments"
+    ],
+    "src/views/pages/partials/product/options.twig": [
+      "salla-file-upload",
+      "salla-multiple-bundle-product",
+      "salla-product-options",
+      "salla-product-size-guide"
+    ],
+    "src/views/pages/partials/product/reservations.twig": [],
+    "src/views/pages/product/index.twig": [
+      "salla-breadcrumb",
+      "salla-filters",
+      "salla-products-list"
+    ],
+    "src/views/pages/product/single.twig": [
+      "salla-add-product-button",
+      "salla-breadcrumb",
+      "salla-comments",
+      "salla-count-down",
+      "salla-gifting",
+      "salla-installment",
+      "salla-metadata",
+      "salla-offer",
+      "salla-products-slider",
+      "salla-quantity-input",
+      "salla-quick-order",
+      "salla-rating-stars",
+      "salla-slider",
+      "salla-social-share"
+    ],
+    "src/views/pages/testimonials.twig": [
+      "salla-breadcrumb",
+      "salla-comments"
+    ],
+    "src/views/pages/thank-you.twig": [
+      "salla-next-order-coupon",
+      "salla-order-branch",
+      "salla-order-shipments"
+    ]
+  },
+  "js": {
+    "src/assets/js/app-helpers.js": {
+      "watch": [],
+      "salla": []
+    },
+    "src/assets/js/app.js": {
+      "watch": [],
+      "salla": [
+        "salla.cart.event.onItemAdded",
+        "salla.cart.event.onUpdated",
+        "salla.comment.event.onAdded",
+        "salla.config.get",
+        "salla.event.document.onClick",
+        "salla.helpers.number",
+        "salla.lang.get",
+        "salla.lang.onLoaded",
+        "salla.log",
+        "salla.money",
+        "salla.notify.setNotifier",
+        "salla.onReady"
+      ]
+    },
+    "src/assets/js/base-page.js": {
+      "watch": [],
+      "salla": [
+        "salla.config.get"
+      ]
+    },
+    "src/assets/js/blog.js": {
+      "watch": [],
+      "salla": [
+        "salla.api.request",
+        "salla.config.isGuest",
+        "salla.lang.get",
+        "salla.notify.error",
+        "salla.url.is_page"
+      ]
+    },
+    "src/assets/js/brands.js": {
+      "watch": [],
+      "salla": []
+    },
+    "src/assets/js/cart.js": {
+      "watch": [
+        "cartGifting",
+        "freeShipApplied",
+        "freeShipping",
+        "freeShippingBar",
+        "freeShippingMsg",
+        "sallaGifting"
+      ],
+      "salla": [
+        "salla.cart.submit",
+        "salla.event.cart.onUpdated",
+        "salla.event.once",
+        "salla.lang.get",
+        "salla.log",
+        "salla.money",
+        "salla.notify.error"
+      ]
+    },
+    "src/assets/js/loyalty.js": {
+      "watch": [],
+      "salla": []
+    },
+    "src/assets/js/order.js": {
+      "watch": [],
+      "salla": [
+        "salla.order.cancel",
+        "salla.order.createCartFromOrder"
+      ]
+    },
+    "src/assets/js/partials/add-product-toast.js": {
+      "watch": [],
+      "salla": [
+        "salla.cart.api.details",
+        "salla.cart.submit",
+        "salla.event.on",
+        "salla.lang.addBulk",
+        "salla.lang.get",
+        "salla.lang.onLoaded",
+        "salla.log",
+        "salla.money",
+        "salla.url.asset",
+        "salla.url.get"
+      ]
+    },
+    "src/assets/js/partials/anime.js": {
+      "watch": [],
+      "salla": []
+    },
+    "src/assets/js/partials/digital-files.js": {
+      "watch": [],
+      "salla": [
+        "salla.lang.get",
+        "salla.lang.onLoaded"
+      ]
+    },
+    "src/assets/js/partials/image-zoom.js": {
+      "watch": [],
+      "salla": []
+    },
+    "src/assets/js/partials/main-menu.js": {
+      "watch": [],
+      "salla": [
+        "salla.api.component.getMenus",
+        "salla.lang.get",
+        "salla.lang.onLoaded",
+        "salla.logger.error",
+        "salla.onReady"
+      ]
+    },
+    "src/assets/js/partials/product-card.js": {
+      "watch": [],
+      "salla": [
+        "salla.config.get",
+        "salla.config.isGuest",
+        "salla.helpers.inputDigitsOnly",
+        "salla.helpers.number",
+        "salla.lang.get",
+        "salla.lang.onLoaded",
+        "salla.money",
+        "salla.storage.get",
+        "salla.url.asset",
+        "salla.url.is_placeholder",
+        "salla.wishlist.toggle"
+      ]
+    },
+    "src/assets/js/partials/tooltip.js": {
+      "watch": [],
+      "salla": []
+    },
+    "src/assets/js/partials/validate-product-options.js": {
+      "watch": [],
+      "salla": [
+        "salla.api.cart",
+        "salla.cart.details",
+        "salla.cart.event.onItemUpdated",
+        "salla.cart.event.onItemUpdatedFailed"
+      ]
+    },
+    "src/assets/js/partials/wishlist-card.js": {
+      "watch": [],
+      "salla": [
+        "salla.logger.warn",
+        "salla.money",
+        "salla.onReady",
+        "salla.wishlist.remove"
+      ]
+    },
+    "src/assets/js/product.js": {
+      "watch": [
+        "beforePrice",
+        "productSku",
+        "productWeight",
+        "startingPriceTitle",
+        "totalPrice"
+      ],
+      "salla": [
+        "salla.event.on",
+        "salla.money",
+        "salla.product.event.onPriceUpdated",
+        "salla.product.getPrice"
+      ]
+    },
+    "src/assets/js/products.js": {
+      "watch": [],
+      "salla": [
+        "salla.config.get",
+        "salla.event.on",
+        "salla.helpers.addParamToUrl"
+      ]
+    },
+    "src/assets/js/testimonials.js": {
+      "watch": [],
+      "salla": [
+        "salla.helpers.addParamToUrl"
+      ]
+    },
+    "src/assets/js/thankyou.js": {
+      "watch": [],
+      "salla": [
+        "salla.order.event.onInvoiceSent"
+      ]
+    },
+    "src/assets/js/twilight.js": {
+      "watch": [],
+      "salla": [
+        "salla.sa"
+      ]
+    },
+    "src/assets/js/wishlist.js": {
+      "watch": [],
+      "salla": [
+        "salla.storage.get",
+        "salla.wishlist.event.onAdded",
+        "salla.wishlist.event.onRemoved"
+      ]
+    }
+  },
+  "hooks": {
+    "src/views/layouts/master.twig": [
+      "body:classes",
+      "body:end",
+      "body:start",
+      "head:end",
+      "head:start"
+    ],
+    "src/views/pages/blog/index.twig": [
+      "blog:index.items.end",
+      "blog:index.items.start"
+    ],
+    "src/views/pages/blog/single.twig": [
+      "blog:single.items.end",
+      "blog:single.items.start"
+    ],
+    "src/views/pages/brands/index.twig": [
+      "brands:index.items.end",
+      "brands:index.items.start"
+    ],
+    "src/views/pages/brands/single.twig": [
+      "brands:single.details.end",
+      "brands:single.details.start",
+      "brands:single.items.end",
+      "brands:single.items.start"
+    ],
+    "src/views/pages/cart.twig": [
+      "cart:coupon.end",
+      "cart:coupon.start",
+      "cart:items.end",
+      "cart:items.start",
+      "cart:summary-card.end",
+      "cart:summary-card.start",
+      "cart:summary.end",
+      "cart:summary.start"
+    ],
+    "src/views/pages/customer/notifications.twig": [
+      "customer:notifications.items.end",
+      "customer:notifications.items.start"
+    ],
+    "src/views/pages/customer/orders/index.twig": [
+      "customer:orders.index.items.end",
+      "customer:orders.index.items.start"
+    ],
+    "src/views/pages/customer/orders/single.twig": [
+      "customer:orders.single.details.end",
+      "customer:orders.single.details.start"
+    ],
+    "src/views/pages/customer/profile.twig": [
+      "customer:profile.form.end",
+      "customer:profile.form.fields.end",
+      "customer:profile.form.fields.start",
+      "customer:profile.form.start",
+      "customer:profile.form.submit.end",
+      "customer:profile.form.submit.start"
+    ],
+    "src/views/pages/customer/wishlist.twig": [
+      "customer:wishlist.items.end",
+      "customer:wishlist.items.start"
+    ],
+    "src/views/pages/page-single.twig": [
+      "information_page.information_page"
+    ],
+    "src/views/pages/product/index.twig": [
+      "product.index.after_products_group_with_filter",
+      "product.index.after_testimonials",
+      "product.index.before_products_group_with_filter",
+      "product:index.items.end",
+      "product:index.items.start"
+    ],
+    "src/views/pages/product/single.twig": [
+      "product.single.after_product_recommendations",
+      "product.single.before_customer_reviews",
+      "product.single.before_product_info",
+      "product.single.before_product_recommendations",
+      "product:single.description",
+      "product:single.description.end",
+      "product:single.description.start",
+      "product:single.form.end",
+      "product:single.form.start"
+    ],
+    "src/views/pages/thank-you.twig": [
+      "thank-you:end",
+      "thank-you:items.end",
+      "thank-you:items.start",
+      "thank-you:start"
+    ]
+  },
+  "raedVersion": "1.358.0"
+}
