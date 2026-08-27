@@ -492,6 +492,47 @@ const x = getComputedStyle(el).getPropertyValue('--js-var');`,
     cleanup();
 }
 
+/* ==================== 3.76) Twig variable naming (snake_case) ==================== */
+
+console.log("\n3.76) تسمية متغيرات Twig (snake_case):");
+{
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": '{"name":"naming"}',
+        "src/views/components/c.twig": `{% set sectionId = 'sbc-' ~ position %}
+{% set columnsMobile  = component.columns_mobile  | default(2) %}
+{% set isMobileOnlySlider = not is_slider and component.enable_slider_mobile %}
+{% set ok_name = 1 %}
+{% set _private = 2 %}
+{% for char, brandGroup in brands %}{% endfor %}
+{% for item in items %}{% endfor %}
+{% macro searchButton(id, showText = false) %}{% endmacro %}
+{% macro badge(text) %}{% endmacro %}
+{# {% set commentedOut = 1 %} #}`,
+    });
+    const { issues } = core.analyzeTheme(theme, {
+        raedParity: false, nodeSyntaxCheck: false, uiTextCheck: false, colorCheck: false, cssVarCheck: false,
+        requiredHooks: false, requiredComponents: false, sizeCheck: false, twilightManifestCheck: false,
+    });
+    const naming = issues.filter((i) => i.type === "Twig Naming");
+    const fixOf = (from) => naming.find((i) => i.fix && i.fix.from === from);
+    assert(naming.length === 6, `كل التصريحات بصيغة camelCase مرصودة (6) — الفعلي: ${naming.length}`);
+    assert(naming.every((i) => core.issueSeverity(i) === "error"), "تسمية Twig مخالفة = خطأ (سبب رفض)");
+    assert(fixOf("sectionId") && fixOf("sectionId").fix.to === "section_id", 'اقتراح التصحيح: sectionId → section_id');
+    assert(fixOf("columnsMobile") && fixOf("columnsMobile").fix.to === "columns_mobile", 'اقتراح التصحيح: columnsMobile → columns_mobile');
+    assert(fixOf("isMobileOnlySlider") && fixOf("isMobileOnlySlider").fix.to === "is_mobile_only_slider", "camelCase متعدد المقاطع يُحوَّل بشكل صحيح");
+    assert(fixOf("brandGroup"), "متغير حلقة for بصيغة camelCase مرصود");
+    assert(fixOf("searchButton") && fixOf("showText"), "اسم الماكرو ومعاملاته مرصودان");
+    assert(!fixOf("ok_name") && !fixOf("_private") && !fixOf("item") && !fixOf("text") && !fixOf("commentedOut"),
+        "snake_case والحلقات السليمة والتعليقات لا تُبلَّغ");
+    const { issues: off } = core.analyzeTheme(theme, {
+        raedParity: false, nodeSyntaxCheck: false, uiTextCheck: false, colorCheck: false, cssVarCheck: false,
+        requiredHooks: false, requiredComponents: false, sizeCheck: false, twilightManifestCheck: false,
+        twigNamingCheck: false,
+    });
+    assert(off.filter((i) => i.type === "Twig Naming").length === 0, "twigNamingCheck:false يعطّل الفحص");
+    cleanup();
+}
+
 /* ==================== 3.75) Twig block balance ==================== */
 
 console.log("\n3.75) توازن بلوكات Twig (if/for/macro/…):");

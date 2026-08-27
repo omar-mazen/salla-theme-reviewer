@@ -2,7 +2,7 @@
   "name": "salla-theme-reviewer",
   "displayName": "Salla Theme Reviewer",
   "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "publisher": "omarmazen",
   "license": "MIT",
   "engines": {
@@ -196,6 +196,12 @@
             "default": true,
             "scope": "resource",
             "description": "Verify that every paired Twig tag (if, for, block, macro, set, embed, and others) is properly opened and closed: an opener without its end tag, an end tag without an opener, and mismatched pairs (e.g. endfor closing an if) are all reported. Self-closing forms like {% set x = value %} and {% block title expr %} are recognized, and {% verbatim %} content is ignored."
+          },
+          "sallaReview.checks.twigNaming": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Enforce lower-case snake_case names for Twig variables at their declaration sites — {% set %} names, {% for %} loop targets, and {% macro %} names/arguments. Salla's reviewer rejects camelCase names (\"The sectionId variable should be in lower case, use _ as a separator\"), so findings are errors. Each finding offers a Quick Fix (💡) that renames the variable to its snake_case form across the whole file."
           },
           "sallaReview.checks.twigDivision": {
             "type": "boolean",

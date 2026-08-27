@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0
+
+New check: **Twig variable naming (snake_case)** — Salla's reviewer rejects
+camelCase Twig variables ("The `sectionId` variable should be in lower case,
+use _ as a separator"), so the extension now catches them before submission:
+
+- Checked at every declaration site: `{% set %}` names (single, multiple, and
+  block form), `{% for %}` loop targets, and `{% macro %}` names and arguments.
+- Reported as **errors** (documented rejection reason) — they block the CI gate.
+- Every finding suggests the corrected name (`columnsMobile` → `columns_mobile`)
+  and offers a **Quick Fix** (💡 / Ctrl+.) that renames the variable to its
+  snake_case form across the whole file.
+- Toggle: `sallaReview.checks.twigNaming` · CLI: `--no-twig-naming`.
+- Comments and `{% verbatim %}` content are ignored; snake_case and `_private`
+  names are never reported.
+
 ## 1.0.2
 
 False-positive fixes for the Hardcoded Color and CSS Variables checks, verified

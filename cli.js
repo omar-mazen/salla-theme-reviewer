@@ -74,6 +74,7 @@ if (writeReports) fs.mkdirSync(reportsDir, { recursive: true });
 const SETTINGS_TO_OPTS = {
     "sallaReview.checks.uiText": "uiTextCheck",
     "sallaReview.checks.twigBlocks": "twigSyntaxCheck",
+    "sallaReview.checks.twigNaming": "twigNamingCheck",
     "sallaReview.checks.jsSyntax": "nodeSyntaxCheck",
     "sallaReview.checks.cssBraces": "cssBracesCheck",
     "sallaReview.checks.scopes": "scopesCheck",
@@ -113,6 +114,7 @@ const flagOpts = {
     raedParity: !flags.has("--no-parity"),
     uiTextCheck: !flags.has("--no-ui-text"),
     twigSyntaxCheck: !flags.has("--no-twig-blocks"),
+    twigNamingCheck: !flags.has("--no-twig-naming"),
     nodeSyntaxCheck: !flags.has("--no-syntax"),
     cssBracesCheck: !flags.has("--no-css-braces"),
     scopesCheck: !flags.has("--no-scopes"),
@@ -165,7 +167,7 @@ const githubMode = flags.has("--github");
 
 // TwilightCI-style check rows: finding type -> named check
 const GH_CHECK_ROWS = [
-    ["Twig syntax", ["Twig Syntax", "Twig Division"]],
+    ["Twig syntax", ["Twig Syntax", "Twig Division", "Twig Naming"]],
     ["JS / CSS syntax", ["JS Syntax", "CSS/SCSS"]],
     ["Translations (hardcoded texts)", ["UI hard-coded text"]],
     ["Theme structure", ["Theme Structure", "Twilight Hooks", "Twilight Components", "salla-scopes"]],

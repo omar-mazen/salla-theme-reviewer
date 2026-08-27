@@ -52,6 +52,7 @@ function getConfig(scopePath) {
 
         uiText: check("uiText"),
         twigBlocks: check("twigBlocks", "twigSyntaxCheck"),
+        twigNaming: check("twigNaming"),
         jsSyntax: check("jsSyntax", "nodeSyntaxCheck"),
         cssBraces: check("cssBraces"),
         scopes: check("scopes"),
@@ -104,6 +105,46 @@ function issueToDiagnostic(issue) {
     return d;
 }
 
+/* =============== Quick fixes (auto-fix from Problems panel / 💡) =============== */
+
+/**
+ * "Twig Naming" findings embed the bad and the corrected name in a stable message
+ * format — parsed here (diagnostic objects don't round-trip custom fields reliably).
+ */
+const TWIG_NAMING_MSG_RE = /"([A-Za-z_][A-Za-z0-9_]*)".*?التصحيح:\s*"([a-z0-9_]+)"/;
+
+const quickFixProvider = {
+    provideCodeActions(document, _range, context) {
+        const actions = [];
+        for (const d of context.diagnostics) {
+            if (d.source !== "Salla Review" || d.code !== "Twig Naming") continue;
+            const m = TWIG_NAMING_MSG_RE.exec(d.message);
+            if (!m) continue;
+            const [, from, to] = m;
+            const action = new vscode.CodeAction(
+                `إعادة تسمية "${from}" إلى "${to}" في كامل الملف`,
+                vscode.CodeActionKind.QuickFix
+            );
+            const edit = new vscode.WorkspaceEdit();
+            const text = document.getText();
+            const wordRe = new RegExp("\\b" + from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "g");
+            let w;
+            while ((w = wordRe.exec(text))) {
+                edit.replace(
+                    document.uri,
+                    new vscode.Range(document.positionAt(w.index), document.positionAt(w.index + from.length)),
+                    to
+                );
+            }
+            action.edit = edit;
+            action.diagnostics = [d];
+            action.isPreferred = true;
+            actions.push(action);
+        }
+        return actions;
+    },
+};
+
 function allThemeRoots() {
     const found = [];
     for (const folder of vscode.workspace.workspaceFolders || []) {
@@ -133,6 +174,7 @@ function engineOpts(cfg) {
 
         uiTextCheck: cfg.uiText,
         twigSyntaxCheck: cfg.twigBlocks,
+        twigNamingCheck: cfg.twigNaming,
         nodeSyntaxCheck: cfg.jsSyntax,
         cssBracesCheck: cfg.cssBraces,
         scopesCheck: cfg.scopes,
@@ -584,6 +626,11 @@ function activate(context) {
         output,
         statusItem,
         watcher,
+        vscode.languages.registerCodeActionsProvider(
+            { pattern: "**/*.twig" },
+            quickFixProvider,
+            { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+        ),
         vscode.commands.registerCommand("sallaReview.scan", () => scanAll(true)),
         vscode.commands.registerCommand("sallaReview.report", () => generateReports()),
         vscode.commands.registerCommand("sallaReview.setupCi", () => setupCiChecks()),

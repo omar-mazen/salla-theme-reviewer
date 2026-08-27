@@ -42,6 +42,7 @@ review, 🔵 is advisory.
 | | Check |
 |---|---|
 | 🔴 | **Block balance** — `{% if %}` / `{% for %}` / `{% macro %}`… left unclosed, closed without an opener, or mismatched (`endfor` closing an `if`) |
+| 🔴 | **Variable naming** — Twig variables must be lower-case snake_case (`sectionId` → `section_id`); checked at `{% set %}`, `{% for %}` targets, and `{% macro %}` names/arguments, with a Quick Fix that renames across the file |
 | 🔴 | **Unsafe division** — dividing by a `|length`-derived variable with no `max(1, x)` or `{% if %}` guard (crashes the page on empty lists) |
 | 🔴 | **Merge conflict markers** — unresolved `<<<<<<<` in any file, including `public/` |
 
