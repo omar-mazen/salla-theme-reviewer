@@ -10,7 +10,7 @@ turns the same checks into commit, push, and pull-request gates for your whole t
 > Diagnostics and reports are in Arabic on purpose — they match the language of Salla's
 > review feedback, so you can compare findings one-to-one with official rejection notes.
 
-- ⚡ Fast: full theme scan ≈ 0.4 s, saving a file re-checks in ≈ 65 ms — never blocks the editor
+- ⚡ Fast: full theme scan ≈ 0.4 s, saving a file re-checks in ≈ 65 ms — never blocks the editor (live as-you-type checking available via `sallaReview.runOnType`)
 - 📴 Private: everything runs locally; internet is used only for the npm version check and reference updates
 - 🧩 Works with classic themes (`twilight.json`) and component bundles (`twilight-bundle.json`)
 
@@ -70,9 +70,9 @@ review, 🔵 is advisory.
 ### Code quality
 | | Check |
 |---|---|
-| 🔴 | **JS syntax** and **CSS/SCSS brace balance** |
-| 🟡 | **CSS variables** — defined but never used, or used but never defined (definitions in Twig, CSS, and JS all count) |
-| 🔵 | **Hardcoded colors** — HEX values and Tailwind palette classes that should come from theme settings |
+| 🔴 | **JS syntax** and **CSS/SCSS brace balance** (brace balance off by default — `sallaReview.checks.cssBraces`) |
+| 🟡 | **CSS variables** — defined but never used, or used but never defined (definitions in Twig, CSS, and JS all count). Off by default — `sallaReview.checks.cssVariables` |
+| 🔵 | **Hardcoded colors** — HEX values and Tailwind palette classes that should come from theme settings. Off by default — `sallaReview.checks.colors` |
 | 🟡 | **Theme size** — estimated compressed size vs. Salla's 1 MB limit |
 
 Bundle projects additionally get: multilanguage fields without a `localizedString` resolver,
@@ -203,7 +203,7 @@ team, the git hooks, and CI all enforce the same rules.
 // <theme>/.vscode/settings.json
 {
   "sallaReview.exclude": ["src/views/components/custom", "/\\.min\\.js$/"],
-  "sallaReview.checks.colors": false,
+  "sallaReview.checks.colors": true, // opt in to a default-off check
   "sallaReview.ci.failOn": "error"
 }
 ```

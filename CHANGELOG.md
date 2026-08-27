@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.2.0
+
+### New defaults — noisy checks are now opt-in
+
+The following are **off by default**; enable them per project in
+`.vscode/settings.json` (e.g. `"sallaReview.checks.colors": true`):
+
+- `sallaReview.checks.colors` (hardcoded HEX/Tailwind colors)
+- `sallaReview.checks.cssBraces` (CSS/SCSS brace balance)
+- `sallaReview.checks.cssVariables` (unused/undefined CSS custom properties)
+- `sallaReview.ci.preCommitHook` and `sallaReview.ci.prePushHook` — "Setup Git &
+  CI Checks" now generates only the GitHub workflow unless the hooks are enabled
+
+The CLI applies the same defaults, so the editor, git hooks, and CI stay in
+agreement; `--no-*` flags still only disable.
+
+### Optional live checking
+
+- New setting `sallaReview.runOnType` (default off): re-analyze against the
+  unsaved editor buffer after a ~1s typing pause, no save needed — all checks
+  work on live content, including the cross-file ones and the Twilight
+  package-version check when editing `package.json`. Saving or closing the file
+  switches the analysis back to the on-disk content. Off by default because
+  per-keystroke re-checks can affect responsiveness on large themes; the default
+  on-save mode stays instant (~65ms). When off, the keystroke listener does no
+  work at all.
+
+## 1.1.1
+
+- Fixed: after updating the `@salla.sa/twilight*` versions in `package.json`, the
+  "outdated Twilight package" error kept showing its stale, pre-edit result until a
+  full re-scan or window reload. Saving `package.json` now recomputes the Twilight
+  Version findings immediately (the npm registry lists stay cached; only the
+  project's declared versions are re-read).
+
 ## 1.1.0
 
 New check: **Twig variable naming (snake_case)** — Salla's reviewer rejects

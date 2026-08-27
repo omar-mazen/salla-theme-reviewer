@@ -2,7 +2,7 @@
   "name": "salla-theme-reviewer",
   "displayName": "Salla Theme Reviewer",
   "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "omarmazen",
   "license": "MIT",
   "engines": {
@@ -71,6 +71,12 @@
             "scope": "resource",
             "description": "Re-analyze a file incrementally every time it is saved (~65ms — only the saved file is re-read; cross-file checks are recomputed from memory)."
           },
+          "sallaReview.runOnType": {
+            "type": "boolean",
+            "default": false,
+            "scope": "resource",
+            "description": "Re-analyze while you type (runs after ~1s of typing pause) — findings appear and clear live against the unsaved editor buffer, no save needed. Off by default: on large themes the extra re-checks can affect editor responsiveness; the default on-save check (sallaReview.runOnSave) is the recommended mode."
+          },
           "sallaReview.scanOnStartup": {
             "type": "boolean",
             "default": true,
@@ -121,9 +127,9 @@
           },
           "sallaReview.checks.cssBraces": {
             "type": "boolean",
-            "default": true,
+            "default": false,
             "scope": "resource",
-            "description": "Report unbalanced curly braces in CSS and SCSS files — an extra closing brace or a block left open breaks the whole stylesheet."
+            "description": "Report unbalanced curly braces in CSS and SCSS files — an extra closing brace or a block left open breaks the whole stylesheet. Off by default."
           },
           "sallaReview.checks.security": {
             "type": "boolean",
@@ -163,13 +169,13 @@
           },
           "sallaReview.checks.cssVariables": {
             "type": "boolean",
-            "default": true,
+            "default": false,
             "scope": "resource",
             "description": "Cross-reference every CSS custom property across the whole theme — definitions in stylesheets, <style> blocks, inline style attributes, and JS setProperty() all count. Reports variables that are defined but never used, and fallback-less var(--x) usages that no file defines (var(--x, fallback) is covered by its fallback and never reported). Overriding a variable through an inline style attribute counts as using it, and BEM-style class names such as .card--title are never mistaken for variables. Platform-provided prefixes (--tw-, --swiper-, --salla-, --mm-, --color-, --font-) are exempt."
           },
           "sallaReview.checks.colors": {
             "type": "boolean",
-            "default": true,
+            "default": false,
             "scope": "resource",
             "description": "Report literal colors — HEX values and Tailwind palette classes such as text-red-500 — in Twig, JS, CSS, and SCSS. Brand colors should come from theme settings or CSS variables so merchants can customize them. Shown as Information (blue) because themes typically contain hundreds. Not reported: SVG content, var(--x, #fff) fallbacks, HEX defaults inside Twig expressions such as theme.settings.get('id', '#fff'), ternary/|default() fallbacks, and Tailwind classes behind @apply (they resolve through the tailwind config)."
           },
@@ -293,15 +299,15 @@
           },
           "sallaReview.ci.preCommitHook": {
             "type": "boolean",
-            "default": true,
+            "default": false,
             "scope": "resource",
-            "description": "Generate the pre-commit git hook (fast local gate, ~0.5s, no network) when running \"Setup Git & CI Checks\"."
+            "description": "Generate the pre-commit git hook (fast local gate, ~0.5s, no network) when running \"Setup Git & CI Checks\". Off by default."
           },
           "sallaReview.ci.prePushHook": {
             "type": "boolean",
-            "default": true,
+            "default": false,
             "scope": "resource",
-            "description": "Generate the pre-push git hook (full check including the npm package version check) when running \"Setup Git & CI Checks\"."
+            "description": "Generate the pre-push git hook (full check including the npm package version check) when running \"Setup Git & CI Checks\". Off by default."
           },
           "sallaReview.ci.workflow": {
             "type": "boolean",

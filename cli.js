@@ -136,12 +136,25 @@ const flagOpts = {
     customRuleCheck: !flags.has("--no-custom-rules"),
 };
 
+/** Checks that are off by default (matching the extension's settings defaults) —
+ *  a project turns them on via .vscode/settings.json (e.g. "sallaReview.checks.colors": true). */
+const DEFAULT_OFF = {
+    "sallaReview.checks.colors": "colorCheck",
+    "sallaReview.checks.cssBraces": "cssBracesCheck",
+    "sallaReview.checks.cssVariables": "cssVarCheck",
+};
+
 /** Effective options for one theme root: defaults ← project settings ← disabling flags. */
 function optsForRoot(root) {
     const settings = loadProjectSettings(root);
     const opts = { ...flagOpts };
     for (const [key, opt] of Object.entries(SETTINGS_TO_OPTS)) {
         if (settings[key] === false) opts[opt] = false;
+    }
+    // Default-off checks stay off unless the project explicitly enables them
+    // (an explicit enable still respects the disabling --no-* flags above).
+    for (const [key, opt] of Object.entries(DEFAULT_OFF)) {
+        if (settings[key] !== true) opts[opt] = false;
     }
     opts.exclude = [
         ...(Array.isArray(settings["sallaReview.exclude"]) ? settings["sallaReview.exclude"] : []),

@@ -28,23 +28,24 @@ const saveTimers = new Map(); // debounce per root
 function getConfig(scopePath) {
     const scope = scopePath ? vscode.Uri.file(scopePath) : null;
     const cfg = vscode.workspace.getConfiguration("sallaReview", scope);
-    const check = (name, legacy) => {
+    const check = (name, legacy, def = true) => {
         const v = cfg.get("checks." + name);
         if (typeof v === "boolean") return v;
         if (legacy) {
             const lv = cfg.get(legacy);
             if (typeof lv === "boolean") return lv;
         }
-        return true;
+        return def;
     };
     return {
         runOnSave: cfg.get("runOnSave", true),
+        runOnType: cfg.get("runOnType", false),
         scanOnStartup: cfg.get("scanOnStartup", true),
         raedAutoUpdateDays: cfg.get("raedAutoUpdateDays", 7),
         ci: {
             failOn: cfg.get("ci.failOn", "error"),
-            preCommitHook: cfg.get("ci.preCommitHook", true),
-            prePushHook: cfg.get("ci.prePushHook", true),
+            preCommitHook: cfg.get("ci.preCommitHook", false),
+            prePushHook: cfg.get("ci.prePushHook", false),
             workflow: cfg.get("ci.workflow", true),
         },
         ignoredTexts: cfg.get("ignoredTexts", []),
@@ -54,7 +55,7 @@ function getConfig(scopePath) {
         twigBlocks: check("twigBlocks", "twigSyntaxCheck"),
         twigNaming: check("twigNaming"),
         jsSyntax: check("jsSyntax", "nodeSyntaxCheck"),
-        cssBraces: check("cssBraces"),
+        cssBraces: check("cssBraces", null, false),
         scopes: check("scopes"),
         security: check("security"),
         customCode: check("customCode"),
@@ -69,8 +70,8 @@ function getConfig(scopePath) {
         bundle: check("bundle"),
         structure: check("structure"),
         twilightManifest: check("twilightManifest", "twilightManifestCheck"),
-        cssVariables: check("cssVariables", "cssVarCheck"),
-        colors: check("colors", "colorCheck"),
+        cssVariables: check("cssVariables", "cssVarCheck", false),
+        colors: check("colors", "colorCheck", false),
         twilightVersion: check("twilightVersion", "twilightVersionCheck"),
         raedParity: check("raedParity", "reportIncludesRaedParity"),
         customRules: check("customRules"),
@@ -258,8 +259,15 @@ async function refreshVersionIssues(root, cfg) {
         return;
     }
     try {
+        // If package.json is open with unsaved edits, check the live buffer, not the disk
+        const pkgPath = path.join(entry.state.projectRoot, "package.json");
+        const openDoc = vscode.workspace.textDocuments.find(
+            (d) => d.uri.scheme === "file" && d.isDirty &&
+                d.uri.fsPath.toLowerCase() === pkgPath.toLowerCase()
+        );
         entry.versionIssues = await twilightVersion.checkTwilightVersions(entry.state.projectRoot, {
             cacheFile: path.join(globalStoragePath, "twilight-versions-cache.json"),
+            pkgRaw: openDoc ? openDoc.getText() : undefined,
         });
     } catch {
         entry.versionIssues = [];
@@ -373,10 +381,18 @@ function rootForFile(p) {
 // .json is included so saving the custom rules file re-applies the rules immediately
 const RELEVANT_FILE_RE = /\.(twig|js|css|scss|json)$/i;
 
-/** Incremental update for a single file — only the file is re-analyzed, then the cross-file checks run from memory */
-function scheduleIncremental(fileFsPath) {
+/**
+ * Incremental update for a single file — only the file is re-analyzed, then the
+ * cross-file checks run from memory.
+ *
+ * liveText: when set (a string), this is an as-you-type refresh — the buffer
+ * content is registered as the engine's view of the file. When null/undefined
+ * (save, create, delete, close), any registered buffer is cleared so the engine
+ * reads the disk again.
+ */
+function scheduleIncremental(fileFsPath, liveText) {
     const cfg = getConfig(fileFsPath);
-    if (!cfg.runOnSave) return;
+    if (liveText != null ? !cfg.runOnType : !cfg.runOnSave) return;
     if (!RELEVANT_FILE_RE.test(fileFsPath)) return;
     // The full engine skip list — includes .salla-review/.githooks/.github/.vscode,
     // so saving vendored CI files never triggers an analysis of them
@@ -396,15 +412,23 @@ function scheduleIncremental(fileFsPath) {
         entry.state.opts = engineOpts(cfg); // pick up any settings change
         entry.state.filters = core.compilePathFilters(entry.state.opts);
         const t0 = Date.now();
+        core.setFileContent(fileFsPath, liveText != null ? liveText : null);
         core.refreshFileInState(entry.state, fileFsPath);
         renderRoot(root);
         updateStatusBar();
+        // Saving package.json changes the declared @salla.sa/twilight* versions —
+        // recompute the Twilight Version findings too, otherwise the old diagnostic
+        // sticks until the next full scan. The npm registry lists stay cached (6h);
+        // only the project's declared versions are re-read.
+        if (path.basename(fileFsPath).toLowerCase() === "package.json") {
+            refreshVersionIssues(root, cfg);
+        }
         const count = entryIssues(entry).length;
         vscode.window.setStatusBarMessage(
             `Salla Review: ${slugForRoot(root)} — ${count} ملاحظة (${Date.now() - t0}ms)`,
             3000
         );
-    }, 350));
+    }, liveText != null ? 1000 : 350));
 }
 
 /* =============== Updating the Raed reference from GitHub =============== */
@@ -555,8 +579,14 @@ async function setupCiChecks() {
                 "Salla Review: تم إنشاء ملفات الفحص، لكن المجلد ليس مستودع Git — الهوكس لن تعمل حتى تنفّذ git init ثم تعيد الأمر."
             );
         } else {
+            const parts = [];
+            if (ci.preCommitHook || ci.prePushHook) {
+                parts.push(`هوكس ${[ci.preCommitHook && "pre-commit", ci.prePushHook && "pre-push"].filter(Boolean).join(" و")} مفعّلة`);
+            }
+            if (ci.workflow) parts.push("workflow جاهز على كل push/PR");
             vscode.window.showInformationMessage(
-                `Salla Review: ✅ تم تفعيل فحوصات Git/CI — pre-commit وpre-push مفعّلان، وworkflow جاهز على كل push/PR. ادفع الملفات الجديدة (.salla-review، .githooks، .github) وأخبر الفريق بتنفيذ: git config core.hooksPath .githooks`
+                `Salla Review: ✅ تم تجهيز فحوصات Git/CI — ${parts.join("، ") || "المحرك فقط"}. ادفع الملفات الجديدة` +
+                (hooksActivated ? " وأخبر الفريق بتنفيذ: git config core.hooksPath .githooks" : "")
             );
         }
     } catch (e) {
@@ -646,7 +676,24 @@ function activate(context) {
             roots.clear();
             statusItem.hide();
         }),
-        vscode.workspace.onDidSaveTextDocument((doc) => scheduleIncremental(doc.uri.fsPath))
+        vscode.workspace.onDidSaveTextDocument((doc) => scheduleIncremental(doc.uri.fsPath)),
+        // Live re-check while typing (opt-in via sallaReview.runOnType) — the buffer
+        // content is analyzed, no save needed. Everything here must stay cheap:
+        // this event fires on every keystroke, so the buffer text is only read
+        // once the (per-file) setting says the feature is on.
+        vscode.workspace.onDidChangeTextDocument((e) => {
+            if (e.document.uri.scheme !== "file" || e.contentChanges.length === 0) return;
+            const fsPath = e.document.uri.fsPath;
+            if (!RELEVANT_FILE_RE.test(fsPath)) return;
+            if (!getConfig(fsPath).runOnType) return;
+            scheduleIncremental(fsPath, e.document.getText());
+        }),
+        // Closing a modified file discards its buffer — analyze the disk state again
+        vscode.workspace.onDidCloseTextDocument((doc) => {
+            if (doc.uri.scheme !== "file") return;
+            core.setFileContent(doc.uri.fsPath, null);
+            scheduleIncremental(doc.uri.fsPath);
+        })
     );
 
     if (getConfig().scanOnStartup) {

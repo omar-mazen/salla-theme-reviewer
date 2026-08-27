@@ -633,6 +633,34 @@ console.log("\n3.8) المحرك التزايدي (refreshFileInState):");
     cleanup();
 }
 
+/* ==== 3.81) Live buffer content (setFileContent) — analyze without saving ==== */
+
+console.log("\n3.81) المحتوى الحي غير المحفوظ (setFileContent):");
+{
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": '{"name":"live"}',
+        "src/views/pages/a.twig": `<p>{{ product.name }}</p>`,
+    });
+    const opts = { nodeSyntaxCheck: false, requiredHooks: false, requiredComponents: false, sizeCheck: false, colorCheck: false, structureCheck: false, twilightManifestCheck: false };
+    const state = core.createThemeState(theme, opts);
+    assert(core.stateIssues(state).length === 0, "الحالة الابتدائية نظيفة");
+
+    // The editor buffer gains a violation — the disk file is untouched
+    const a = path.join(theme, "src/views/pages/a.twig");
+    core.setFileContent(a, `<p>{{ product.name }}</p>\n<p>نص حي غير محفوظ</p>\n{% set liveCamel = 1 %}`);
+    core.refreshFileInState(state, a);
+    let issues = core.stateIssues(state);
+    assert(issues.some((i) => i.type === "UI hard-coded text" && (i.visible || "").includes("نص حي غير محفوظ")), "التحرير الحي (بدون حفظ) يلتقط المخالفة الجديدة");
+    assert(issues.some((i) => i.type === "Twig Naming" && i.fix && i.fix.from === "liveCamel"), "فحوصات التسمية تعمل على المحتوى الحي أيضاً");
+
+    // Clearing the override goes back to the clean on-disk content
+    core.setFileContent(a, null);
+    core.refreshFileInState(state, a);
+    issues = core.stateIssues(state);
+    assert(issues.length === 0, "مسح المحتوى الحي يعيد التحليل لحالة الملف على القرص");
+    cleanup();
+}
+
 /* ========== 3.85) Incremental refresh must honor SKIP_DIRS (vendored engine bug) ========== */
 
 console.log(String.fromCharCode(10) + "3.85) الحفظ داخل المجلدات المستثناة دائماً:");
