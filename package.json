@@ -2,7 +2,7 @@
   "name": "salla-theme-reviewer",
   "displayName": "Salla Theme Reviewer",
   "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "omarmazen",
   "license": "MIT",
   "engines": {
@@ -24,6 +24,10 @@
     "make-icon": "node scripts/make-icon.js"
   },
   "contributes": {
+    "configurationDefaults": {
+      "scss.lint.unknownAtRules": "ignore",
+      "css.lint.unknownAtRules": "ignore"
+    },
     "commands": [
       {
         "command": "sallaReview.scan",
@@ -161,13 +165,13 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Cross-reference every CSS custom property across the whole theme — definitions in stylesheets, <style> blocks, inline style attributes, and JS setProperty() all count. Reports variables that are defined but never used, and var(--x) usages that no file defines. Platform-provided prefixes (--tw-, --swiper-, --salla-, --color-, --font-) are exempt."
+            "description": "Cross-reference every CSS custom property across the whole theme — definitions in stylesheets, <style> blocks, inline style attributes, and JS setProperty() all count. Reports variables that are defined but never used, and fallback-less var(--x) usages that no file defines (var(--x, fallback) is covered by its fallback and never reported). Overriding a variable through an inline style attribute counts as using it, and BEM-style class names such as .card--title are never mistaken for variables. Platform-provided prefixes (--tw-, --swiper-, --salla-, --mm-, --color-, --font-) are exempt."
           },
           "sallaReview.checks.colors": {
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Report literal colors — HEX values and Tailwind palette classes such as text-red-500 — in Twig, JS, CSS, and SCSS. Brand colors should come from theme settings or CSS variables so merchants can customize them. Shown as Information (blue) because themes typically contain hundreds. SVG content and var(--x, #fff) fallbacks are not reported."
+            "description": "Report literal colors — HEX values and Tailwind palette classes such as text-red-500 — in Twig, JS, CSS, and SCSS. Brand colors should come from theme settings or CSS variables so merchants can customize them. Shown as Information (blue) because themes typically contain hundreds. Not reported: SVG content, var(--x, #fff) fallbacks, HEX defaults inside Twig expressions such as theme.settings.get('id', '#fff'), ternary/|default() fallbacks, and Tailwind classes behind @apply (they resolve through the tailwind config)."
           },
           "sallaReview.checks.twilightVersion": {
             "type": "boolean",

@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.2
+
+False-positive fixes for the Hardcoded Color and CSS Variables checks, verified
+against 19 real themes:
+
+- **Hardcoded Color** no longer reports HEX values that serve as defaults or
+  fallbacks inside Twig expressions — `theme.settings.get('id', '#fff')`,
+  ternaries such as `x is not empty ? x : '#fff'`, and `|default('#fff')`.
+  A plain literal like `{% set c = '#fff' %}` is still reported.
+- **Hardcoded Color** no longer reports Tailwind palette classes behind
+  `@apply` (e.g. `@apply border-gray-200`) — they resolve through the tailwind
+  config, which themes point at their CSS variables.
+- **CSS Variables** no longer mistakes BEM-style class names for variable
+  definitions (`.card--title:hover`, `&--modifier:before`, `.--class-name:focus`).
+- **CSS Variables** no longer reports `var(--x, fallback)` usages as
+  "used but undefined" — the fallback covers the undefined case by design.
+  Fallback-less `var(--x)` is still checked.
+- **CSS Variables** no longer reports a variable as unused when a Twig template
+  overrides it through an inline `style="--x: {{ … }}"` attribute — that is the
+  theming-API pattern (default in SCSS, merchant value injected from Twig).
+- `--mm-*` (mmenu library) added to the platform-variable exemptions.
+- The extension now ships editor defaults that silence VS Code's built-in
+  `Unknown at rule @apply` (unknownAtRules) warnings for CSS/SCSS — those come
+  from the built-in validator, not from this extension, and are noise in
+  Tailwind-based themes.
+
 ## 1.0.1
 
 Maintenance release — no rule or behaviour changes; republished for the VS Code

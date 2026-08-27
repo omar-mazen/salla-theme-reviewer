@@ -438,6 +438,59 @@ const x = getComputedStyle(el).getPropertyValue('--js-var');`,
     assert(!descHas("--js-var"), "setProperty في JS يُحتسب تعريفاً وgetPropertyValue استخداماً");
     cleanup();
 }
+{
+    // Regressions 1.0.2: fallback defaults, @apply, BEM names, style-attr overrides
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": '{"name":"fp"}',
+        "src/views/layouts/variables.twig": `<style>
+:root {
+    --product-card-bg: {{theme.settings.get('product_card_bg_color', '#eeeeee')}};
+    --pc-title: {{ theme.settings.get('product_card_title_color', '#000') }};
+}
+</style>
+{% set cb_text = c.text_color is not empty ? c.text_color : '#ffffff' %}
+{% set cb_from = c.gradient_from is not empty ? c.gradient_from : 'var(--color-primary)' %}
+{% set truly_fixed = '#ab12cd' %}
+<div style="color: {{ color|default('#fafafa') }}"></div>`,
+        // A custom property overridden through an inline style attribute (multi-line)
+        // whose default lives in scss — the theming-API pattern, not an unused variable.
+        "src/views/components/home/blog.twig": `<section class="blog"
+    style="
+        {% if text_color %}--bl-text-color: {{ text_color }};{% endif %}
+    ">
+</section>`,
+        "src/assets/styles/blog.scss": `.blog {
+  --bl-text-color: var(--color-text-primary, #ffffff);
+}
+.card { color: var(--max-card-price-color, var(--color-text-primary, #FFFFFF)); }
+.bare { color: var(--really-missing-var); }
+&.max-header--overlay-transparent:not(.is-scrolled) { top: 0; }
+.s-block.s-block--full-bg:first-of-type { top: 0; }
+.--class-name:hover { top: 0; }
+.btn { @apply rounded-md border-gray-200 bg-red-500; }
+.real { border-color: #12ab34; }`,
+    });
+    const { issues } = core.analyzeTheme(theme, {
+        raedParity: false, nodeSyntaxCheck: false, uiTextCheck: false,
+        requiredHooks: false, requiredComponents: false, sizeCheck: false, twilightManifestCheck: false,
+    });
+    const colors = issues.filter((i) => i.type === "Hardcoded Color");
+    const colorHas = (s) => colors.some((i) => (i.desc || "").includes(s));
+    assert(!colorHas("#eeeeee") && !colorHas("#000"), "hex كافتراضي في theme.settings.get لا يُبلَّغ");
+    assert(!colorHas("#ffffff"), "hex كبديل في شرط ثلاثي داخل twig لا يُبلَّغ");
+    assert(!colorHas("#fafafa"), "hex داخل |default() لا يُبلَّغ");
+    assert(colorHas("#ab12cd"), "{% set x = '#hex' %} بلا بديل ديناميكي يُبلَّغ");
+    assert(!colorHas("border-gray-200") && !colorHas("bg-red-500"), "أصناف Tailwind بعد @apply لا تُبلَّغ");
+    assert(colorHas("#12ab34"), "hex عادي في scss يُبلَّغ");
+    const vars = issues.filter((i) => i.type === "CSS Variables");
+    const varHas = (s) => vars.some((i) => (i.desc || "").includes(s));
+    assert(!varHas("--bl-text-color"), "افتراضي في scss + تجاوز عبر style attribute لا يُعد متغيراً غير مستخدم");
+    assert(!varHas("--max-card-price-color"), "var(--x, fallback) بلا تعريف لا يُبلَّغ (البديل يغطيه)");
+    assert(varHas("--really-missing-var"), "var(--x) بلا بديل وبلا تعريف يُبلَّغ");
+    assert(!varHas("--overlay-transparent") && !varHas("--full-bg") && !varHas("--class-name"),
+        "أسماء أصناف BEM (‎.a--b:hover و &--x و .--class-name) ليست متغيرات CSS");
+    cleanup();
+}
 
 /* ==================== 3.75) Twig block balance ==================== */
 
