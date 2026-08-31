@@ -1,5 +1,73 @@
 # Changelog
 
+## 1.3.0
+
+### Performance — nothing blocks the editor any more
+
+Opening a workspace froze the window for the duration of the startup scan, every
+save cost 200 ms+ of extension-host time, and the Git view stalled while any of
+it ran. All three had the same cause: the entire analysis ran synchronously on the
+extension-host thread (shared with the Git extension), and every refresh
+re-rendered the diagnostics of every file in the theme.
+
+- **Review worker thread.** The engine now runs in `lib/review-worker.js` on its
+  own thread. The extension host only posts small messages and renders the
+  replies, so scans never block the editor, the SCM view, or other extensions.
+  If the worker dies it is restarted (up to 3 times), then the same engine runs
+  in-process, chunked, as a last resort.
+- **Delta diagnostics.** A refresh reports only the files whose findings changed
+  (plus the ones that became clean); the editor applies them in one batched
+  `DiagnosticCollection.set()` call instead of one message per file. Saving a
+  file touches that file only.
+- **Engine reads each file once.** Every per-file check now shares one
+  in-memory view of the file (raw lines, comment-stripped lines, masked source,
+  line index, Twig tags) — previously a Twig file was read from disk ~10 times
+  and comment-stripped ~6 times per scan. The cross-file checks (scopes, CSS
+  variables, manifest, required hooks/components, bundle checks) never touch the
+  disk on an incremental refresh: they read the facts and file lines kept in
+  memory, and `twilight.json` is parsed once per scan.
+- **One directory walk per full scan** (was six: root discovery, project root,
+  file list, scopes, size estimate, public/ conflict scan), with a single stat
+  per file; theme discovery goes through the workspace search service
+  (ripgrep) instead of a synchronous walk of every workspace folder.
+- **`public/` is never touched.** The build output is no longer entered at all —
+  not reviewed, not read for merge-conflict markers, not counted in the size
+  estimate (previously every built text file up to 3 MB was read on each full
+  scan). Only the Theme Structure check still verifies that the folder exists
+  and is not empty.
+- **Cheaper editor hooks.** Settings are cached per workspace folder (the
+  keystroke listener no longer rebuilds ~35 settings per key press), closing a
+  clean tab no longer triggers a refresh, and "Save All" produces one engine
+  round-trip per theme instead of one per file. The Twig Naming quick fix builds
+  its whole-file edit only when the action is actually invoked.
+- **Algorithmic fixes.** Line numbers via the shared line index instead of
+  `slice().split()` per match; per-line color/variable scans no longer slice the
+  line for every match (quadratic on minified single-line CSS); Twig division
+  guards evaluated once per variable instead of per line; `stateIssues()` is
+  memoized per refresh.
+- **Minified/generated assets** vendored under `src/` (`*.min.js`, `*.min.css`, or
+  any file with a line longer than 4000 characters) are exempt from the per-line
+  UI-text, color, security, and syntax checks; conflict markers, CSS-variable
+  facts, and custom rules still apply to them.
+- Twilight package versions: the three npm registry lookups run in parallel and
+  are shared across themes checked at the same time.
+- `⏱` timing lines for every scan and refresh (engine time, files rendered) in
+  the **Salla Review** output channel, and `node scripts/bench.js <theme>` for
+  measuring the engine outside the editor.
+- Removed unreachable code (`checkRequiredHooks`, `checkRequiredComponents`,
+  `checkMergeConflicts` — superseded by the facts-based versions).
+
+Measured on a synthetic 346-file theme (Windows, Node 22, engine time only):
+
+| | full scan | save refresh (engine) |
+|---|---|---|
+| 1.2.0, default checks | 1629 ms — on the editor thread | 41 ms — on the editor thread |
+| 1.3.0, default checks | 553 ms — on the worker thread | 5 ms (≈ 6 ms round-trip) |
+| 1.2.0, every check on | 2183 ms | 62 ms |
+| 1.3.0, every check on | 587 ms | 10 ms (≈ 15 ms round-trip) |
+
+The CLI and git hooks use the same faster engine.
+
 ## 1.2.0
 
 ### New defaults — noisy checks are now opt-in

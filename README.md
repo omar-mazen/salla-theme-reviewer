@@ -10,7 +10,7 @@ turns the same checks into commit, push, and pull-request gates for your whole t
 > Diagnostics and reports are in Arabic on purpose — they match the language of Salla's
 > review feedback, so you can compare findings one-to-one with official rejection notes.
 
-- ⚡ Fast: full theme scan ≈ 0.4 s, saving a file re-checks in ≈ 65 ms — never blocks the editor (live as-you-type checking available via `sallaReview.runOnType`)
+- ⚡ Non-blocking: the whole analysis runs on a dedicated worker thread — the editor, the Git view, and other extensions never wait for it. Saving a file re-checks it in a few milliseconds and only the files whose findings changed are updated in the Problems panel (live as-you-type checking available via `sallaReview.runOnType`). Timings for every scan and refresh are logged in the **Salla Review** output channel. Theme discovery uses the workspace search, so folders hidden by `files.exclude` are not scanned.
 - 📴 Private: everything runs locally; internet is used only for the npm version check and reference updates
 - 🧩 Works with classic themes (`twilight.json`) and component bundles (`twilight-bundle.json`)
 
@@ -44,7 +44,7 @@ review, 🔵 is advisory.
 | 🔴 | **Block balance** — `{% if %}` / `{% for %}` / `{% macro %}`… left unclosed, closed without an opener, or mismatched (`endfor` closing an `if`) |
 | 🔴 | **Variable naming** — Twig variables must be lower-case snake_case (`sectionId` → `section_id`); checked at `{% set %}`, `{% for %}` targets, and `{% macro %}` names/arguments, with a Quick Fix that renames across the file |
 | 🔴 | **Unsafe division** — dividing by a `|length`-derived variable with no `max(1, x)` or `{% if %}` guard (crashes the page on empty lists) |
-| 🔴 | **Merge conflict markers** — unresolved `<<<<<<<` in any file, including `public/` |
+| 🔴 | **Merge conflict markers** — unresolved `<<<<<<<` in any scanned source file (`public/` is never scanned) |
 
 ### Structure & platform requirements
 | | Check |

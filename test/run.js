@@ -262,7 +262,15 @@ console.log("\n3.5) فحوصات مراسلات الرفض:");
     source="selected"
     source-value="[{{ products|map(p => p.id)|join(',') }}]">
 </salla-products-slider>`,
-        // A merge conflict marker inside public (as in the actual email)
+        // A merge conflict marker in a source file — detected
+        "src/assets/js/product-card.js": `line1
+<<<<<<< HEAD
+const a = 1;
+=======
+const a = 2;
+>>>>>>> feature
+`,
+        // The same inside public/ (build output) — never touched
         "public/product-card.js": `line1
 <<<<<<< HEAD
 const a = 1;
@@ -287,7 +295,8 @@ const a = 2;
     assert(byType("Misleading UX (Social Proof/Urgency)").some((i) => i.severity === "error"), "عبارة «يشاهدون هذا المنتج» = خطأ صريح بدون Math.random");
     assert(byType("Twig Division").length === 1 && byType("Twig Division")[0].file.endsWith("div.twig"), "قسمة غير آمنة تُكتشف والمؤمّنة بـ max() لا");
     assert(descHas("Twilight Components", "pull/581"), "salla-products-slider ببناء يدوي → مرجع PR 581");
-    assert(byType("Merge Conflict").length === 2 && byType("Merge Conflict")[0].file.includes("public"), "علامتا تعارض دمج داخل public تُكتشفان");
+    assert(byType("Merge Conflict").length === 2 && byType("Merge Conflict").every((i) => i.file.includes("src")), "علامتا تعارض دمج في src تُكتشفان");
+    assert(!issues.some((i) => i.file.split(path.sep).includes("public")), "لا شيء داخل public يُفحص (ولا علامات التعارض)");
     assert(byType("Vite Config").length === 0, "ثيم كلاسيكي مع vite: لا فحص Vite (للمجموعات فقط)");
 
     cleanup();
@@ -748,14 +757,15 @@ console.log("\n3.10) تضمين/استثناء المسارات:");
         assert(!uiFiles.includes("skip.twig"), "استثناء مجلد بمساره يعمل");
         assert(!uiFiles.includes("lib.min.js"), "استثناء regex ‏(/\\.min\\.js$/) يعمل");
         assert(!uiFiles.includes("x.twig"), "استثناء اسم مجرد (vendor) يعمل");
-        assert(issues.some((i) => i.type === "Merge Conflict"), "تعارضات public تبقى مفحوصة مع الاستثناءات الأخرى");
+        assert(!issues.some((i) => i.type === "Merge Conflict"), "public لا يُفحص أبداً — حتى تعارضاته");
         cleanup();
     }
-    // 2) An exclude that applies to public as well
+    // 2) Listing public in exclude is harmless (it is always excluded anyway)
     {
         const { theme, cleanup } = makeTheme(files);
         const { issues } = core.analyzeTheme(theme, { ...base, exclude: ["public"] });
-        assert(!issues.some((i) => i.type === "Merge Conflict"), "استثناء public يوقف فحص تعارضاته");
+        assert(!issues.some((i) => i.type === "Merge Conflict"), "استثناء public صراحةً لا يغيّر شيئاً (مستثنى دائماً)");
+        assert(issues.some((i) => i.type === "UI hard-coded text" && i.file.endsWith("keep.twig")), "بقية الملفات تُفحص كالمعتاد");
         cleanup();
     }
     // 3) A leftover include value (removed feature) is ignored — everything still scans
@@ -1091,8 +1101,95 @@ console.log("\n5) التقرير:");
     assert(empty.includes("لم يتم العثور على أي مخالفة"), "تقرير نظيف يصرّح بذلك بوضوح");
 }
 
-if (failures > 0) {
-    console.error(`\n❌ فشل ${failures} اختبار`);
-    process.exit(1);
+/* ==================== 6) Engine host + worker thread (what the editor talks to) ==================== */
+
+async function testEngine() {
+    console.log("\n6) محرك المراجعة (worker):");
+
+    // Root discovery helper — accepts marker files, drops nested roots
+    const j = (...p) => path.join("C:", "w", ...p);
+    const kept = core.pickTopLevelRoots([j("a", "twilight.json"), j("a", "nested", "twilight.json"), j("b"), j("b")]);
+    assert(kept.length === 2 && kept.includes(j("a")) && kept.includes(j("b")), "pickTopLevelRoots: يقبل ملفات العلامة ويستبعد الجذور المتداخلة والمكررة");
+
+    const files = {
+        "twilight.json": JSON.stringify({ name: "w", settings: [] }),
+        "src/views/layouts/master.twig": `<salla-scopes></salla-scopes>{% set fooBar = 1 %}`,
+        "src/views/pages/a.twig": `<p>Hello world</p>`,
+        // A minified asset: one 5000-char line + a conflict marker
+        "src/assets/js/vendor.min.js": `alert('Should not be reported');` + "x".repeat(5000) + `\n<<<<<<< HEAD\n`,
+    };
+    for (let i = 0; i < 6; i++) files[`src/views/pages/clean${i}.twig`] = `<div>{{ trans('a.b') }}</div>`;
+    const { theme, cleanup } = makeTheme(files);
+    const opts = { raedParity: false, requiredHooks: false, requiredComponents: false, sizeCheck: false, structureCheck: false };
+    const master = path.join(theme, "src", "views", "layouts", "master.twig");
+
+    // Minified guard
+    {
+        const { issues } = core.analyzeTheme(theme, opts);
+        assert(!issues.some((i) => i.type === "UI hard-coded text" && i.file.endsWith("vendor.min.js")), "ملف minified: لا فحص نصوص UI عليه");
+        assert(!issues.some((i) => i.type === "JS Syntax"), "ملف minified: لا فحص Syntax عليه");
+        assert(issues.some((i) => i.type === "Merge Conflict" && i.file.endsWith("vendor.min.js")), "ملف minified: علامات التعارض ما زالت تُرصد");
+    }
+
+    // The engine host used by the worker (and in-process as a fallback)
+    const { createEngine } = require("../lib/review-engine.js");
+    const eng = createEngine();
+    const full = await eng.handle({ type: "fullScan", root: theme, opts });
+    assert(full.full === true && full.changed.length === 3, `fullScan: لقطة كاملة بالملفات التي فيها نتائج (${full.changed.length})`);
+    const byFile = new Map(full.changed);
+    const masterDiags = byFile.get(master) || [];
+    assert(masterDiags.some((d) => d.code === "Twig Naming" && d.line === 0 && d.severity === "error" && d.endCol > d.startCol), "المخرجات المضغوطة: line (0-based) و code و severity والأعمدة");
+    assert(full.counts.total === full.counts.errors + full.counts.warnings + full.counts.infos && full.counts.errors >= 2, "العدّادات متسقة");
+    assert(!("lines" in (masterDiags[0] || {})) && !("issues" in full), "الردود لا تحمل سطور الملفات");
+
+    const again = await eng.handle({ type: "refreshFiles", root: theme, files: [{ file: master, liveText: null }], opts });
+    assert(again.changed.length === 0 && again.removed.length === 0, "إعادة فحص بلا تغيير = دلتا فارغة");
+
+    const fixed = await eng.handle({ type: "refreshFiles", root: theme, files: [{ file: master, liveText: `<salla-scopes></salla-scopes>{% set foo_bar = 1 %}` }], opts });
+    assert(fixed.removed.length === 1 && fixed.removed[0] === master && fixed.changed.length === 0, "المخزن الحي يزيل نتائج الملف فقط (removed)");
+
+    const back = await eng.handle({ type: "refreshFiles", root: theme, files: [{ file: master, liveText: null }], opts });
+    assert(back.changed.length === 1 && back.changed[0][0] === master && back.removed.length === 0, "العودة للقرص تعيد نتائج الملف فقط (changed)");
+
+    const rep = await eng.handle({ type: "report", root: theme, slug: "w", displayBase: theme, raedParity: false, extraIssues: [] });
+    assert(typeof rep.markdown === "string" && rep.markdown.includes("Twig Naming"), "التقرير يُبنى داخل المحرك");
+    const miss = await eng.handle({ type: "refreshFiles", root: theme + "x", files: [], opts });
+    assert(miss.missing === true, "جذر غير معروف → missing (المحرر يعيد الفحص الكامل)");
+
+    // The real worker thread, through the message protocol
+    const { Worker } = require("worker_threads");
+    const worker = new Worker(path.join(__dirname, "..", "lib", "review-worker.js"));
+    let id = 0;
+    const pending = new Map();
+    worker.on("message", (m) => { const p = pending.get(m.id); pending.delete(m.id); (m.ok ? p.resolve : p.reject)(m.result); });
+    const req = (msg) => new Promise((resolve, reject) => { pending.set(++id, { resolve, reject }); worker.postMessage({ ...msg, id }); });
+
+    const wf = await req({ type: "fullScan", root: theme, opts });
+    assert(wf.full && wf.changed.length === full.changed.length && wf.counts.total === full.counts.total, "worker thread: نفس النتائج عبر الرسائل");
+    const bad = await req({ type: "nope" }).then(() => null, (e) => e);
+    assert(bad && /unknown engine message/.test(bad.message), "worker thread: رسالة غير معروفة → خطأ مُرجع لا انهيار");
+
+    // A request for another root is served while a (chunked) full scan is running
+    const second = makeTheme({ "twilight.json": JSON.stringify({ name: "s", settings: [] }), "src/views/pages/x.twig": `<p>{{ trans('x') }}</p>` });
+    await req({ type: "fullScan", root: second.theme, opts });
+    const order = [];
+    const p1 = req({ type: "fullScan", root: theme, opts, batch: 1 }).then(() => order.push("scan"));
+    const p2 = req({ type: "refreshFiles", root: second.theme, files: [], opts }).then(() => order.push("refresh"));
+    await Promise.all([p1, p2]);
+    assert(order[0] === "refresh", `worker thread: طلب لجذر آخر يُخدم أثناء الفحص الكامل (${order.join(" → ")})`);
+
+    await worker.terminate();
+    cleanup();
+    second.cleanup();
 }
-console.log("\n✅ كل الاختبارات ناجحة");
+
+testEngine().then(() => {
+    if (failures > 0) {
+        console.error(`\n❌ فشل ${failures} اختبار`);
+        process.exit(1);
+    }
+    console.log("\n✅ كل الاختبارات ناجحة");
+}).catch((e) => {
+    console.error(e);
+    process.exit(1);
+});

@@ -2,6 +2,7 @@
 const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
+const { Worker } = require("worker_threads");
 const core = require("./lib/salla-review-core.js");
 const twilightVersion = require("./lib/twilight-version.js");
 const raedUpdater = require("./lib/raed-updater.js");
@@ -13,21 +14,55 @@ let output; // vscode.OutputChannel
 let statusItem; // vscode.StatusBarItem
 
 /**
- * Per theme root: the incremental engine state + version-check results (network)
- * + the files currently shown in Problems (so stale ones can be cleared).
- * Map<rootPath, { state, versionIssues, shownFiles: Set<string> }>
+ * Per theme root. Nothing heavy lives on this thread: the engine state (facts,
+ * file lines, issues) is owned by the review worker; the extension host keeps
+ * only what it needs to render — which files currently show diagnostics, the
+ * severity counts, the network (version) findings, and the pending refreshes.
+ *
+ * Map<root, {
+ *   projectRoot, shownFiles: Set<file>, counts, versionIssues, versionDiags,
+ *   pending: Map<file, TextDocument|null>, timer, inFlight, watcher
+ * }>
  */
 const roots = new Map();
-const saveTimers = new Map(); // debounce per root
+/** Files whose unsaved editor buffer is registered with the engine (normalized keys) */
+const liveFiles = new Set();
+
+const SAVE_DEBOUNCE_MS = 350;
+const LIVE_DEBOUNCE_MS = 1000;
+const MAX_WORKER_RESTARTS = 3;
+
+function fileKey(p) {
+    return process.platform === "win32" ? String(p).toLowerCase() : String(p);
+}
+
+/* =============== Settings (cached per workspace folder) =============== */
+
+/**
+ * Resource-scoped settings resolve per workspace folder, so one read per folder
+ * is enough. The cache is dropped on any sallaReview.* change. Previously every
+ * keystroke and every watcher event rebuilt the whole object (~35 lookups).
+ */
+const configCache = new Map(); // folder fsPath ("" = no folder) -> cfg
+
+function getConfig(scopePath) {
+    const folder = scopePath ? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(scopePath)) : undefined;
+    const key = folder ? folder.uri.fsPath : "";
+    let cfg = configCache.get(key);
+    if (!cfg) {
+        cfg = readConfig(folder ? folder.uri : null);
+        configCache.set(key, cfg);
+    }
+    return cfg;
+}
 
 /**
  * Read settings scoped to the project folder (resource scope) — each theme can
  * customize its checks and patterns from its own .vscode/settings.json. The old
  * keys (pre 0.5.0) are read as a fallback so saved preferences are not lost.
  */
-function getConfig(scopePath) {
-    const scope = scopePath ? vscode.Uri.file(scopePath) : null;
-    const cfg = vscode.workspace.getConfiguration("sallaReview", scope);
+function readConfig(scopeUri) {
+    const cfg = vscode.workspace.getConfiguration("sallaReview", scopeUri);
     const check = (name, legacy, def = true) => {
         const v = cfg.get("checks." + name);
         if (typeof v === "boolean") return v;
@@ -79,94 +114,6 @@ function getConfig(scopePath) {
     };
 }
 
-function severityFor(issue) {
-    if (issue.severity === "error") return vscode.DiagnosticSeverity.Error;
-    if (issue.severity === "warning") return vscode.DiagnosticSeverity.Warning;
-    if (issue.severity === "info") return vscode.DiagnosticSeverity.Information;
-    return core.ERROR_TYPES.has(issue.type)
-        ? vscode.DiagnosticSeverity.Error
-        : vscode.DiagnosticSeverity.Warning;
-}
-
-function issueToDiagnostic(issue) {
-    const lineIdx = Math.max(0, (issue.line || 1) - 1);
-    const lineText = (issue.lines && issue.lines[lineIdx]) || "";
-    const startCol = Math.max(0, lineText.search(/\S/));
-    const endCol = Math.max(startCol + 1, lineText.length);
-    const range = new vscode.Range(lineIdx, startCol, lineIdx, endCol);
-
-    let message = issue.desc || issue.type;
-    if (issue.visible) {
-        const v = issue.visible.length > 120 ? issue.visible.slice(0, 117) + "…" : issue.visible;
-        message += `: "${v}"`;
-    }
-    const d = new vscode.Diagnostic(range, message, severityFor(issue));
-    d.source = "Salla Review";
-    d.code = issue.type;
-    return d;
-}
-
-/* =============== Quick fixes (auto-fix from Problems panel / 💡) =============== */
-
-/**
- * "Twig Naming" findings embed the bad and the corrected name in a stable message
- * format — parsed here (diagnostic objects don't round-trip custom fields reliably).
- */
-const TWIG_NAMING_MSG_RE = /"([A-Za-z_][A-Za-z0-9_]*)".*?التصحيح:\s*"([a-z0-9_]+)"/;
-
-const quickFixProvider = {
-    provideCodeActions(document, _range, context) {
-        const actions = [];
-        for (const d of context.diagnostics) {
-            if (d.source !== "Salla Review" || d.code !== "Twig Naming") continue;
-            const m = TWIG_NAMING_MSG_RE.exec(d.message);
-            if (!m) continue;
-            const [, from, to] = m;
-            const action = new vscode.CodeAction(
-                `إعادة تسمية "${from}" إلى "${to}" في كامل الملف`,
-                vscode.CodeActionKind.QuickFix
-            );
-            const edit = new vscode.WorkspaceEdit();
-            const text = document.getText();
-            const wordRe = new RegExp("\\b" + from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "g");
-            let w;
-            while ((w = wordRe.exec(text))) {
-                edit.replace(
-                    document.uri,
-                    new vscode.Range(document.positionAt(w.index), document.positionAt(w.index + from.length)),
-                    to
-                );
-            }
-            action.edit = edit;
-            action.diagnostics = [d];
-            action.isPreferred = true;
-            actions.push(action);
-        }
-        return actions;
-    },
-};
-
-function allThemeRoots() {
-    const found = [];
-    for (const folder of vscode.workspace.workspaceFolders || []) {
-        found.push(...core.findThemeRoots(folder.uri.fsPath));
-    }
-    return found;
-}
-
-function slugForRoot(root) {
-    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
-    if (!folder) return path.basename(root);
-    const rel = path.relative(folder.uri.fsPath, root);
-    if (!rel) return path.basename(folder.uri.fsPath);
-    return rel.split(path.sep)[0];
-}
-
-function displayBaseForRoot(root) {
-    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
-    return folder ? folder.uri.fsPath : path.dirname(root);
-}
-
 /** Engine options from the settings (Raed parity is computed only at report time — not here) */
 function engineOpts(cfg) {
     return {
@@ -199,38 +146,190 @@ function engineOpts(cfg) {
     };
 }
 
-function entryIssues(entry) {
-    return [...core.stateIssues(entry.state), ...entry.versionIssues];
+/* =============== Review engine client (worker thread, in-process fallback) =============== */
+
+/**
+ * All analysis runs in lib/review-worker.js on its own thread; this thread only
+ * posts small messages and renders the replies. If the worker dies it is
+ * restarted (a few times), then the same engine code runs in-process as a
+ * last resort — still chunked, so the editor never freezes.
+ */
+const engine = (() => {
+    let worker = null;
+    let inline = null; // in-process fallback engine
+    let nextId = 1;
+    let restarts = 0;
+    let manifestPath = null;
+    const pending = new Map(); // id -> {resolve, reject}
+
+    function spawn() {
+        const w = new Worker(path.join(__dirname, "lib", "review-worker.js"), {
+            resourceLimits: { maxOldGenerationSizeMb: 2048 },
+        });
+        w.on("message", (m) => {
+            const p = pending.get(m.id);
+            if (!p) return;
+            pending.delete(m.id);
+            if (m.ok) p.resolve(m.result);
+            else p.reject(Object.assign(new Error(m.result && m.result.message), { stack: m.result && m.result.stack }));
+        });
+        w.on("error", (e) => { if (worker === w) died(`error: ${e && e.message}`); });
+        w.on("exit", (code) => { if (worker === w) died(`exit ${code}`); });
+        worker = w;
+        if (manifestPath) post({ type: "setRaedManifest", path: manifestPath }).catch(() => { /* logged by died() */ });
+    }
+
+    function died(reason) {
+        worker = null;
+        for (const p of pending.values()) p.reject(new Error(`review engine restarted (${reason})`));
+        pending.clear();
+        restarts++;
+        if (restarts > MAX_WORKER_RESTARTS) {
+            inline = require("./lib/review-engine.js").createEngine();
+            if (manifestPath) inline.handle({ type: "setRaedManifest", path: manifestPath });
+            output.appendLine(`⚠️ review worker stopped (${reason}) — running the engine in-process from now on`);
+        } else {
+            output.appendLine(`⚠️ review worker stopped (${reason}) — restarting (${restarts}/${MAX_WORKER_RESTARTS})`);
+        }
+        // Everything on screen came from the lost state — start over
+        resetShown();
+        scanAll(false);
+    }
+
+    function post(msg) {
+        if (inline) return inline.handle(msg);
+        if (!worker) {
+            try {
+                spawn();
+            } catch (e) {
+                // Worker threads unavailable (packaging/runtime problem) — same engine, in-process
+                inline = require("./lib/review-engine.js").createEngine();
+                if (manifestPath) inline.handle({ type: "setRaedManifest", path: manifestPath });
+                output.appendLine(`⚠️ could not start the review worker (${e && e.message}) — running the engine in-process`);
+                return inline.handle(msg);
+            }
+        }
+        return new Promise((resolve, reject) => {
+            const id = nextId++;
+            pending.set(id, { resolve, reject });
+            worker.postMessage({ ...msg, id });
+        });
+    }
+
+    return {
+        request: post,
+        setRaedManifest(p) {
+            manifestPath = p;
+            if (worker || inline) post({ type: "setRaedManifest", path: p }).catch(() => { /* logged by died() */ });
+        },
+        dispose() {
+            const w = worker;
+            worker = null;
+            if (w) w.terminate();
+        },
+    };
+})();
+
+/* =============== Rendering (delta only) =============== */
+
+const SEVERITY = {
+    error: vscode.DiagnosticSeverity.Error,
+    warning: vscode.DiagnosticSeverity.Warning,
+    info: vscode.DiagnosticSeverity.Information,
+};
+
+function toDiagnostic(d) {
+    const diag = new vscode.Diagnostic(
+        new vscode.Range(d.line, d.startCol, d.line, d.endCol),
+        d.message,
+        SEVERITY[d.severity] || vscode.DiagnosticSeverity.Warning
+    );
+    diag.source = "Salla Review";
+    diag.code = d.code;
+    return diag;
 }
 
-/** Re-render the diagnostics of a single root from its state (in memory — fast) */
-function renderRoot(root) {
+function newEntry() {
+    return {
+        projectRoot: null,
+        shownFiles: new Set(),
+        counts: null,
+        versionIssues: [],
+        versionDiags: [],
+        pending: new Map(),
+        timer: null,
+        inFlight: false,
+        watcher: null,
+    };
+}
+
+function pkgPathOf(entry) {
+    return entry.projectRoot ? path.join(entry.projectRoot, "package.json") : null;
+}
+
+/**
+ * Apply an engine reply: only the files whose diagnostics changed are touched,
+ * in ONE DiagnosticCollection.set() call (the array overload batches them into a
+ * single message to the renderer). Previously every issue of every file was
+ * rebuilt and re-set on each save — one message per file.
+ */
+function applyReply(root, reply) {
     const entry = roots.get(root);
-    if (!entry) return;
+    if (!entry) return { files: 0, ms: 0 };
+    const t0 = Date.now();
+    if (reply.projectRoot) entry.projectRoot = reply.projectRoot;
+    const pkg = pkgPathOf(entry);
+    const pkgKey = pkg ? fileKey(pkg) : null;
 
-    const byFile = new Map();
-    for (const issue of entryIssues(entry)) {
-        if (!byFile.has(issue.file)) byFile.set(issue.file, []);
-        byFile.get(issue.file).push(issueToDiagnostic(issue));
+    const batch = [];
+    const changed = new Set();
+    for (const [file, diags] of reply.changed) {
+        changed.add(file);
+        let list = diags.map(toDiagnostic);
+        if (pkgKey && fileKey(file) === pkgKey) list = list.concat(entry.versionDiags);
+        batch.push([vscode.Uri.file(file), list]);
+        entry.shownFiles.add(file);
     }
+    const removed = reply.full ? [...entry.shownFiles].filter((f) => !changed.has(f)) : reply.removed;
+    for (const file of removed) {
+        const keepVersion = pkgKey && fileKey(file) === pkgKey && entry.versionDiags.length;
+        batch.push([vscode.Uri.file(file), keepVersion ? entry.versionDiags : undefined]);
+        entry.shownFiles.delete(file);
+    }
+    if (batch.length) diagnostics.set(batch);
+    entry.counts = reply.counts;
+    return { files: batch.length, ms: Date.now() - t0 };
+}
 
-    // Clear files that no longer have issues
-    for (const f of entry.shownFiles) {
-        if (!byFile.has(f)) diagnostics.delete(vscode.Uri.file(f));
+function clearEntryDiagnostics(entry) {
+    const batch = [...entry.shownFiles].map((f) => [vscode.Uri.file(f), undefined]);
+    const pkg = pkgPathOf(entry);
+    if (pkg && entry.versionDiags.length) batch.push([vscode.Uri.file(pkg), undefined]);
+    if (batch.length) diagnostics.set(batch);
+    entry.shownFiles.clear();
+}
+
+/** After the engine restarted: what is on screen no longer matches any state */
+function resetShown() {
+    diagnostics.clear();
+    for (const entry of roots.values()) {
+        entry.shownFiles.clear();
+        entry.counts = null;
+        entry.pending.clear();
+        entry.inFlight = false;
     }
-    for (const [file, diags] of byFile) {
-        diagnostics.set(vscode.Uri.file(file), diags);
-    }
-    entry.shownFiles = new Set(byFile.keys());
 }
 
 function updateStatusBar() {
     let errors = 0, warnings = 0;
-    for (const [, entry] of roots) {
-        for (const i of entryIssues(entry)) {
-            const sev = severityFor(i);
-            if (sev === vscode.DiagnosticSeverity.Error) errors++;
-            else if (sev === vscode.DiagnosticSeverity.Warning) warnings++;
+    for (const entry of roots.values()) {
+        if (entry.counts) {
+            errors += entry.counts.errors;
+            warnings += entry.counts.warnings;
+        }
+        for (const i of entry.versionIssues) {
+            if (core.issueSeverity(i) === "error") errors++;
+            else warnings++;
         }
     }
     const total = errors + warnings;
@@ -239,46 +338,155 @@ function updateStatusBar() {
     statusItem.show();
 }
 
-/** Full scan of a single root (synchronous, but fast now — no external node processes) */
-function fullScanRoot(root, cfg) {
-    const prev = roots.get(root);
-    const state = core.createThemeState(root, engineOpts(cfg));
-    roots.set(root, {
-        state,
-        versionIssues: prev ? prev.versionIssues : [],
-        shownFiles: prev ? prev.shownFiles : new Set(),
-    });
-    renderRoot(root);
+function entryTotal(entry) {
+    return (entry.counts ? entry.counts.total : 0) + entry.versionIssues.length;
 }
 
-/** Twilight versions check (network) — not repeated on every save; 6-hour cache */
-async function refreshVersionIssues(root, cfg) {
+/* =============== Quick fixes (auto-fix from Problems panel / 💡) =============== */
+
+/**
+ * "Twig Naming" findings embed the bad and the corrected name in a stable message
+ * format — parsed here (diagnostic objects don't round-trip custom fields reliably).
+ * The whole-file edit is built lazily in resolveCodeAction, not on every cursor move.
+ */
+const TWIG_NAMING_MSG_RE = /"([A-Za-z_][A-Za-z0-9_]*)".*?التصحيح:\s*"([a-z0-9_]+)"/;
+
+const quickFixProvider = {
+    provideCodeActions(document, _range, context) {
+        const actions = [];
+        for (const d of context.diagnostics) {
+            if (d.source !== "Salla Review" || d.code !== "Twig Naming") continue;
+            const m = TWIG_NAMING_MSG_RE.exec(d.message);
+            if (!m) continue;
+            const [, from, to] = m;
+            const action = new vscode.CodeAction(
+                `إعادة تسمية "${from}" إلى "${to}" في كامل الملف`,
+                vscode.CodeActionKind.QuickFix
+            );
+            action.diagnostics = [d];
+            action.isPreferred = true;
+            action._rename = { document, from, to };
+            actions.push(action);
+        }
+        return actions;
+    },
+    resolveCodeAction(action) {
+        const r = action._rename;
+        if (!r) return action;
+        const edit = new vscode.WorkspaceEdit();
+        const text = r.document.getText();
+        const wordRe = new RegExp("\\b" + r.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "g");
+        let w;
+        while ((w = wordRe.exec(text))) {
+            edit.replace(
+                r.document.uri,
+                new vscode.Range(r.document.positionAt(w.index), r.document.positionAt(w.index + r.from.length)),
+                r.to
+            );
+        }
+        action.edit = edit;
+        return action;
+    },
+};
+
+/* =============== Theme roots =============== */
+
+/**
+ * Theme discovery through the workspace search service (ripgrep, off the
+ * extension host) instead of a synchronous walk of every workspace folder.
+ * Honours files.exclude like any other search.
+ */
+async function discoverThemeRoots() {
+    const uris = await vscode.workspace.findFiles(
+        "**/{twilight,twilight-bundle}.json",
+        "**/{node_modules,public,.git,.salla-review}/**"
+    );
+    return core.pickTopLevelRoots(uris.map((u) => u.fsPath));
+}
+
+function slugForRoot(root) {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
+    if (!folder) return path.basename(root);
+    const rel = path.relative(folder.uri.fsPath, root);
+    if (!rel) return path.basename(folder.uri.fsPath);
+    return rel.split(path.sep)[0];
+}
+
+function displayBaseForRoot(root) {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
+    return folder ? folder.uri.fsPath : path.dirname(root);
+}
+
+/** Which root owns this file? */
+function rootForFile(p) {
+    return [...roots.keys()]
+        .filter((r) => p === r || p.startsWith(r + path.sep))
+        .sort((a, b) => b.length - a.length)[0];
+}
+
+async function pickRoot(placeHolder) {
+    const found = await discoverThemeRoots();
+    if (found.length === 0) {
+        vscode.window.showWarningMessage("Salla Review: لا يوجد أي ثيم (twilight.json) في الـ workspace.");
+        return null;
+    }
+    if (found.length === 1) return found[0];
+    const pick = await vscode.window.showQuickPick(
+        found.map((r) => ({ label: slugForRoot(r), description: r, root: r })),
+        { placeHolder }
+    );
+    return pick ? pick.root : null;
+}
+
+// .json is included so saving the custom rules file re-applies the rules immediately
+const RELEVANT_FILE_RE = /\.(twig|js|css|scss|json)$/i;
+
+/** One watcher per theme root for create/delete (saves cover edits); scoped so unrelated folders cost nothing */
+function ensureWatcher(entry, root) {
+    if (entry.watcher) return;
+    const w = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.file(root), "**/*.{twig,js,css,scss,json}"),
+        false, true, false
+    );
+    w.onDidCreate((uri) => scheduleIncremental(uri.fsPath));
+    w.onDidDelete((uri) => scheduleIncremental(uri.fsPath));
+    entry.watcher = w;
+}
+
+function removeRoot(root) {
     const entry = roots.get(root);
-    if (!entry || !cfg.twilightVersion || !globalStoragePath) {
-        if (entry) entry.versionIssues = [];
-        return;
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    if (entry.watcher) entry.watcher.dispose();
+    clearEntryDiagnostics(entry);
+    roots.delete(root);
+    engine.request({ type: "removeRoot", root }).catch(() => { /* engine restart — handled there */ });
+}
+
+/* =============== Scanning =============== */
+
+async function fullScanRoot(root) {
+    let entry = roots.get(root);
+    if (!entry) {
+        entry = newEntry();
+        roots.set(root, entry);
     }
+    ensureWatcher(entry, root);
+    const slug = slugForRoot(root);
     try {
-        // If package.json is open with unsaved edits, check the live buffer, not the disk
-        const pkgPath = path.join(entry.state.projectRoot, "package.json");
-        const openDoc = vscode.workspace.textDocuments.find(
-            (d) => d.uri.scheme === "file" && d.isDirty &&
-                d.uri.fsPath.toLowerCase() === pkgPath.toLowerCase()
+        const reply = await engine.request({ type: "fullScan", root, opts: engineOpts(getConfig(root)) });
+        if (!roots.has(root)) return; // removed meanwhile
+        const r = applyReply(root, reply);
+        output.appendLine(
+            `⏱ scan ${slug}: engine ${reply.ms} ms (${reply.files} files, ${reply.counts.total} findings) — render ${r.files} files ${r.ms} ms`
         );
-        entry.versionIssues = await twilightVersion.checkTwilightVersions(entry.state.projectRoot, {
-            cacheFile: path.join(globalStoragePath, "twilight-versions-cache.json"),
-            pkgRaw: openDoc ? openDoc.getText() : undefined,
-        });
-    } catch {
-        entry.versionIssues = [];
+    } catch (e) {
+        output.appendLine(`⚠️ scan ${slug} failed: ${e.message}`);
     }
-    renderRoot(root);
-    updateStatusBar();
 }
 
 async function scanAll(showSummary) {
-    const cfg = getConfig();
-    const found = allThemeRoots();
+    const found = await discoverThemeRoots();
     if (found.length === 0) {
         if (showSummary) {
             vscode.window.showWarningMessage("Salla Review: لا يوجد أي ثيم (twilight.json) في الـ workspace.");
@@ -288,11 +496,7 @@ async function scanAll(showSummary) {
 
     // Remove roots that disappeared
     for (const known of [...roots.keys()]) {
-        if (!found.includes(known)) {
-            const entry = roots.get(known);
-            for (const f of entry.shownFiles) diagnostics.delete(vscode.Uri.file(f));
-            roots.delete(known);
-        }
+        if (!found.includes(known)) removeRoot(known);
     }
 
     await vscode.window.withProgress(
@@ -300,26 +504,23 @@ async function scanAll(showSummary) {
         async (progress) => {
             for (const root of found) {
                 progress.report({ message: `مراجعة ${slugForRoot(root)}…` });
-                // Yield an event-loop tick between roots so we don't freeze other extensions
-                await new Promise((r) => setImmediate(r));
-                fullScanRoot(root, getConfig(root)); // settings scoped to the project folder
+                await fullScanRoot(root); // runs in the worker — this thread stays free
             }
         }
     );
     updateStatusBar();
 
     // Network check after showing local results (does not delay their display)
-    for (const root of found) refreshVersionIssues(root, getConfig(root));
+    for (const root of found) refreshVersionIssues(root);
 
     const summary = [...roots.entries()].map(([root, entry]) => ({
         slug: slugForRoot(root),
-        count: entryIssues(entry).length,
+        count: entryTotal(entry),
     }));
     const withIssues = summary.filter((s) => s.count > 0);
     const clean = summary.filter((s) => s.count === 0);
     const total = withIssues.reduce((a, s) => a + s.count, 0);
 
-    output.clear();
     output.appendLine(`📋 ملخص المراجعة (${new Date().toLocaleString()})`);
     output.appendLine(" - الثيمات التي بها مشاكل:");
     output.appendLine(withIssues.length ? "   " + withIssues.map((s) => `${s.slug} (${s.count})`).join(", ") : "   (لا يوجد)");
@@ -341,8 +542,116 @@ async function scanAll(showSummary) {
     }
 }
 
+/** Twilight versions check (network, this thread) — not repeated on every save; 6-hour cache */
+async function refreshVersionIssues(root) {
+    const entry = roots.get(root);
+    if (!entry || !entry.projectRoot) return;
+    const cfg = getConfig(root);
+    if (!cfg.twilightVersion || !globalStoragePath) {
+        entry.versionIssues = [];
+    } else {
+        try {
+            // If package.json is open with unsaved edits, check the live buffer, not the disk
+            const pkgPath = pkgPathOf(entry);
+            const openDoc = vscode.workspace.textDocuments.find(
+                (d) => d.uri.scheme === "file" && d.isDirty && fileKey(d.uri.fsPath) === fileKey(pkgPath)
+            );
+            entry.versionIssues = await twilightVersion.checkTwilightVersions(entry.projectRoot, {
+                cacheFile: path.join(globalStoragePath, "twilight-versions-cache.json"),
+                pkgRaw: openDoc ? openDoc.getText() : undefined,
+            });
+        } catch {
+            entry.versionIssues = [];
+        }
+    }
+    if (!roots.has(root)) return;
+    entry.versionDiags = entry.versionIssues.map((i) => toDiagnostic(core.diagnosticFieldsFor(i)));
+    renderVersionDiags(entry);
+    updateStatusBar();
+}
+
+/** package.json shows the engine's findings for that file plus the version findings from here */
+function renderVersionDiags(entry) {
+    const pkg = pkgPathOf(entry);
+    if (!pkg) return;
+    const uri = vscode.Uri.file(pkg);
+    const fromEngine = (diagnostics.get(uri) || []).filter((d) => d.code !== "Twilight Version");
+    const all = fromEngine.concat(entry.versionDiags);
+    diagnostics.set(uri, all.length ? all : undefined);
+}
+
+/* =============== Incremental refresh =============== */
+
+/**
+ * Queue a file for an incremental refresh of its theme. `liveDoc` set = an
+ * as-you-type refresh (the buffer is read when the debounce fires, not now);
+ * otherwise (save, create, delete, close) the engine reads the disk again.
+ */
+function scheduleIncremental(fileFsPath, liveDoc) {
+    // Cheapest checks first — this runs for every watcher event and keystroke
+    if (!RELEVANT_FILE_RE.test(fileFsPath)) return;
+    // The full engine skip list — includes .salla-review/.githooks/.github/.vscode,
+    // so saving vendored CI files never triggers an analysis of them
+    if (fileFsPath.split(path.sep).some((s) => core.SKIP_DIRS.has(s))) return;
+
+    const root = rootForFile(fileFsPath);
+    if (!root) {
+        // A new file may have created a new theme (a new twilight.json)
+        if (!liveDoc && /twilight(-bundle)?\.json$/i.test(fileFsPath)) scanAll(false);
+        return;
+    }
+    const cfg = getConfig(fileFsPath);
+    if (liveDoc ? !cfg.runOnType : !cfg.runOnSave) return;
+    if (liveDoc) liveFiles.add(fileKey(fileFsPath));
+    else liveFiles.delete(fileKey(fileFsPath));
+    queueRefresh(root, fileFsPath, liveDoc || null);
+}
+
+function queueRefresh(root, file, liveDoc) {
+    const entry = roots.get(root);
+    if (!entry) return;
+    entry.pending.set(file, liveDoc);
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => flushRefresh(root), liveDoc ? LIVE_DEBOUNCE_MS : SAVE_DEBOUNCE_MS);
+}
+
+/** One round-trip per root: every file queued during the debounce window goes in a single message */
+async function flushRefresh(root) {
+    const entry = roots.get(root);
+    if (!entry || entry.inFlight || entry.pending.size === 0) return;
+    const files = [...entry.pending].map(([file, doc]) => ({ file, liveText: doc ? doc.getText() : null }));
+    entry.pending.clear();
+    entry.inFlight = true;
+    const slug = slugForRoot(root);
+    const t0 = Date.now();
+    try {
+        const reply = await engine.request({ type: "refreshFiles", root, files, opts: engineOpts(getConfig(root)) });
+        if (!roots.has(root)) return;
+        if (reply.missing) {
+            await fullScanRoot(root); // the engine lost this root (restart) — rebuild it
+        } else {
+            const r = applyReply(root, reply);
+            updateStatusBar();
+            // Saving package.json changes the declared @salla.sa/twilight* versions —
+            // recompute the Twilight Version findings too (registry lists stay cached 6h).
+            if (files.some((f) => path.basename(f.file).toLowerCase() === "package.json")) refreshVersionIssues(root);
+            const elapsed = Date.now() - t0;
+            vscode.window.setStatusBarMessage(`Salla Review: ${slug} — ${entryTotal(entry)} ملاحظة (${elapsed}ms)`, 3000);
+            output.appendLine(
+                `⏱ refresh ${slug} (${files.length} file${files.length > 1 ? "s" : ""}): engine ${reply.ms} ms — render ${r.files} files ${r.ms} ms — total ${elapsed} ms`
+            );
+        }
+    } catch (e) {
+        output.appendLine(`⚠️ refresh ${slug} failed: ${e.message}`);
+    } finally {
+        entry.inFlight = false;
+        if (entry.pending.size) flushRefresh(root);
+    }
+}
+
+/* =============== Reports =============== */
+
 async function generateReports() {
-    const cfg = getConfig();
     if (roots.size === 0) await scanAll(false);
     if (roots.size === 0) {
         vscode.window.showWarningMessage("Salla Review: لا يوجد أي ثيم (twilight.json) في الـ workspace.");
@@ -353,13 +662,20 @@ async function generateReports() {
     for (const [root, entry] of roots) {
         const slug = slugForRoot(root);
         const base = displayBaseForRoot(root);
-        // Raed parity is computed only here (not on every scan) — a big saving in scan time
-        const parity = cfg.raedParity ? core.compareWithRaed(entry.state.projectRoot) : null;
-        const md = core.buildReportMarkdown(slug, entryIssues(entry), parity, base);
+        // Raed parity is computed only here (not on every scan) — in the worker
+        const reply = await engine.request({
+            type: "report",
+            root,
+            slug,
+            displayBase: base,
+            raedParity: getConfig(root).raedParity,
+            extraIssues: entry.versionIssues,
+        });
+        if (reply.missing) continue;
         const reportsDir = path.join(base, "reports");
         fs.mkdirSync(reportsDir, { recursive: true });
         const file = path.join(reportsDir, `${slug}-report.md`);
-        fs.writeFileSync(file, md, "utf8");
+        fs.writeFileSync(file, reply.markdown, "utf8");
         if (!firstReport) firstReport = file;
     }
 
@@ -369,66 +685,6 @@ async function generateReports() {
         await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(firstReport));
         vscode.window.setStatusBarMessage(`Salla Review: تم حفظ ${roots.size} تقرير داخل reports/`, 5000);
     }
-}
-
-/** Which root owns this file? */
-function rootForFile(p) {
-    return [...roots.keys()]
-        .filter((r) => p === r || p.startsWith(r + path.sep))
-        .sort((a, b) => b.length - a.length)[0];
-}
-
-// .json is included so saving the custom rules file re-applies the rules immediately
-const RELEVANT_FILE_RE = /\.(twig|js|css|scss|json)$/i;
-
-/**
- * Incremental update for a single file — only the file is re-analyzed, then the
- * cross-file checks run from memory.
- *
- * liveText: when set (a string), this is an as-you-type refresh — the buffer
- * content is registered as the engine's view of the file. When null/undefined
- * (save, create, delete, close), any registered buffer is cleared so the engine
- * reads the disk again.
- */
-function scheduleIncremental(fileFsPath, liveText) {
-    const cfg = getConfig(fileFsPath);
-    if (liveText != null ? !cfg.runOnType : !cfg.runOnSave) return;
-    if (!RELEVANT_FILE_RE.test(fileFsPath)) return;
-    // The full engine skip list — includes .salla-review/.githooks/.github/.vscode,
-    // so saving vendored CI files never triggers an analysis of them
-    if (fileFsPath.split(path.sep).some((s) => core.SKIP_DIRS.has(s))) return;
-
-    const root = rootForFile(fileFsPath);
-    if (!root) {
-        // A new file may have created a new theme (a new twilight.json)
-        if (/twilight(-bundle)?\.json$/i.test(fileFsPath)) scanAll(false);
-        return;
-    }
-
-    clearTimeout(saveTimers.get(root));
-    saveTimers.set(root, setTimeout(() => {
-        const entry = roots.get(root);
-        if (!entry) return;
-        entry.state.opts = engineOpts(cfg); // pick up any settings change
-        entry.state.filters = core.compilePathFilters(entry.state.opts);
-        const t0 = Date.now();
-        core.setFileContent(fileFsPath, liveText != null ? liveText : null);
-        core.refreshFileInState(entry.state, fileFsPath);
-        renderRoot(root);
-        updateStatusBar();
-        // Saving package.json changes the declared @salla.sa/twilight* versions —
-        // recompute the Twilight Version findings too, otherwise the old diagnostic
-        // sticks until the next full scan. The npm registry lists stay cached (6h);
-        // only the project's declared versions are re-read.
-        if (path.basename(fileFsPath).toLowerCase() === "package.json") {
-            refreshVersionIssues(root, cfg);
-        }
-        const count = entryIssues(entry).length;
-        vscode.window.setStatusBarMessage(
-            `Salla Review: ${slugForRoot(root)} — ${count} ملاحظة (${Date.now() - t0}ms)`,
-            3000
-        );
-    }, liveText != null ? 1000 : 350));
 }
 
 /* =============== Updating the Raed reference from GitHub =============== */
@@ -460,7 +716,7 @@ async function updateRaedReference(silent) {
         }
         const r = await raedUpdater.updateRaedManifest(manifest, { sha });
         fs.writeFileSync(meta, JSON.stringify({ sha: r.sha, checkedAt: Date.now(), raedVersion: r.raedVersion }), "utf8");
-        core.setRaedManifestPath(manifest);
+        engine.setRaedManifest(manifest);
         output.appendLine(`🔄 تم تحديث مرجع رائد → v${r.raedVersion || "?"} (commit ${r.sha.slice(0, 10)})`);
         vscode.window.showInformationMessage(
             `Salla Review: تم تحديث مرجع رائد إلى v${r.raedVersion || "?"} (${r.sha.slice(0, 10)}) — أعد المراجعة لاعتماد المرجع الجديد`,
@@ -510,20 +766,8 @@ const VENDOR_FILES = [
  * check is required in branch protection).
  */
 async function setupCiChecks() {
-    const found = allThemeRoots();
-    if (found.length === 0) {
-        vscode.window.showWarningMessage("Salla Review: لا يوجد أي ثيم (twilight.json) في الـ workspace.");
-        return;
-    }
-    let root = found[0];
-    if (found.length > 1) {
-        const pick = await vscode.window.showQuickPick(
-            found.map((r) => ({ label: slugForRoot(r), description: r, root: r })),
-            { placeHolder: "اختر الثيم الذي تريد تفعيل فحوصات Git/CI له" }
-        );
-        if (!pick) return;
-        root = pick.root;
-    }
+    const root = await pickRoot("اختر الثيم الذي تريد تفعيل فحوصات Git/CI له");
+    if (!root) return;
 
     const write = (rel, content, exec) => {
         const abs = path.join(root, ...rel.split("/"));
@@ -600,20 +844,8 @@ async function setupCiChecks() {
  * waiting for an extension update.
  */
 async function editCustomRules() {
-    const found = allThemeRoots();
-    if (found.length === 0) {
-        vscode.window.showWarningMessage("Salla Review: لا يوجد أي ثيم (twilight.json) في الـ workspace.");
-        return;
-    }
-    let root = found[0];
-    if (found.length > 1) {
-        const pick = await vscode.window.showQuickPick(
-            found.map((r) => ({ label: slugForRoot(r), description: r, root: r })),
-            { placeHolder: "اختر الثيم الذي تريد تحرير قواعده المخصصة" }
-        );
-        if (!pick) return;
-        root = pick.root;
-    }
+    const root = await pickRoot("اختر الثيم الذي تريد تحرير قواعده المخصصة");
+    if (!root) return;
 
     const cfg = getConfig(root);
     const rel = cfg.customRulesFile || core.DEFAULT_RULES_FILE;
@@ -633,6 +865,8 @@ async function editCustomRules() {
     }
 }
 
+/* =============== Activation =============== */
+
 function activate(context) {
     diagnostics = vscode.languages.createDiagnosticCollection("salla-review");
     output = vscode.window.createOutputChannel("Salla Review");
@@ -644,18 +878,19 @@ function activate(context) {
     try { fs.mkdirSync(globalStoragePath, { recursive: true }); } catch { /* non-fatal */ }
 
     const storedManifest = raedPaths().manifest;
-    if (fs.existsSync(storedManifest)) core.setRaedManifestPath(storedManifest);
+    if (fs.existsSync(storedManifest)) engine.setRaedManifest(storedManifest);
 
-    // Watch file create/delete (save covers edits) — incremental update, not a full scan
-    const watcher = vscode.workspace.createFileSystemWatcher("**/*.{twig,js,css,scss,json}");
-    watcher.onDidCreate((uri) => scheduleIncremental(uri.fsPath));
-    watcher.onDidDelete((uri) => scheduleIncremental(uri.fsPath));
+    // New/removed themes only — per-theme file watchers are created with each root
+    const markerWatcher = vscode.workspace.createFileSystemWatcher("**/{twilight,twilight-bundle}.json", false, true, false);
+    markerWatcher.onDidCreate((uri) => scheduleIncremental(uri.fsPath));
+    markerWatcher.onDidDelete(() => scanAll(false));
 
     context.subscriptions.push(
         diagnostics,
         output,
         statusItem,
-        watcher,
+        markerWatcher,
+        { dispose: () => { for (const root of [...roots.keys()]) removeRoot(root); engine.dispose(); } },
         vscode.languages.registerCodeActionsProvider(
             { pattern: "**/*.twig" },
             quickFixProvider,
@@ -672,27 +907,40 @@ function activate(context) {
             )
         ),
         vscode.commands.registerCommand("sallaReview.clear", () => {
+            for (const root of [...roots.keys()]) removeRoot(root);
             diagnostics.clear();
-            roots.clear();
+            liveFiles.clear();
             statusItem.hide();
         }),
-        vscode.workspace.onDidSaveTextDocument((doc) => scheduleIncremental(doc.uri.fsPath)),
-        // Live re-check while typing (opt-in via sallaReview.runOnType) — the buffer
-        // content is analyzed, no save needed. Everything here must stay cheap:
-        // this event fires on every keystroke, so the buffer text is only read
-        // once the (per-file) setting says the feature is on.
+        vscode.workspace.onDidChangeConfiguration((e) => {
+            if (e.affectsConfiguration("sallaReview")) configCache.clear();
+        }),
+        vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            configCache.clear();
+            scanAll(false);
+        }),
+        vscode.workspace.onDidSaveTextDocument((doc) => {
+            if (doc.uri.scheme === "file") scheduleIncremental(doc.uri.fsPath);
+        }),
+        // Live re-check while typing (opt-in via sallaReview.runOnType). This
+        // fires on every keystroke window-wide, so only cached lookups happen
+        // here; the buffer text is read when the debounce fires.
         vscode.workspace.onDidChangeTextDocument((e) => {
             if (e.document.uri.scheme !== "file" || e.contentChanges.length === 0) return;
             const fsPath = e.document.uri.fsPath;
             if (!RELEVANT_FILE_RE.test(fsPath)) return;
             if (!getConfig(fsPath).runOnType) return;
-            scheduleIncremental(fsPath, e.document.getText());
+            scheduleIncremental(fsPath, e.document);
         }),
-        // Closing a modified file discards its buffer — analyze the disk state again
+        // Closing a file whose buffer was registered discards it — analyze the disk
+        // state again. Closing a clean tab (the common case) does nothing at all.
         vscode.workspace.onDidCloseTextDocument((doc) => {
             if (doc.uri.scheme !== "file") return;
-            core.setFileContent(doc.uri.fsPath, null);
-            scheduleIncremental(doc.uri.fsPath);
+            const fsPath = doc.uri.fsPath;
+            if (!liveFiles.delete(fileKey(fsPath))) return;
+            const root = rootForFile(fsPath);
+            if (root) queueRefresh(root, fsPath, null);
+            else engine.request({ type: "setContent", file: fsPath, text: null }).catch(() => { /* engine restart */ });
         })
     );
 
@@ -702,6 +950,8 @@ function activate(context) {
     setTimeout(() => maybeAutoUpdateRaed(), 5000);
 }
 
-function deactivate() {}
+function deactivate() {
+    engine.dispose();
+}
 
 module.exports = { activate, deactivate };

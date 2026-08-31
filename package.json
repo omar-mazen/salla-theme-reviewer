@@ -2,7 +2,7 @@
   "name": "salla-theme-reviewer",
   "displayName": "Salla Theme Reviewer",
   "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "omarmazen",
   "license": "MIT",
   "engines": {
@@ -69,13 +69,13 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Re-analyze a file incrementally every time it is saved (~65ms — only the saved file is re-read; cross-file checks are recomputed from memory)."
+            "description": "Re-analyze a file incrementally every time it is saved — only the saved file is re-read and the cross-file checks are recomputed from memory, on the review worker thread (a few milliseconds; the editor is never blocked)."
           },
           "sallaReview.runOnType": {
             "type": "boolean",
             "default": false,
             "scope": "resource",
-            "description": "Re-analyze while you type (runs after ~1s of typing pause) — findings appear and clear live against the unsaved editor buffer, no save needed. Off by default: on large themes the extra re-checks can affect editor responsiveness; the default on-save check (sallaReview.runOnSave) is the recommended mode."
+            "description": "Re-analyze while you type (runs after ~1s of typing pause) — findings appear and clear live against the unsaved editor buffer, no save needed. The analysis runs on the review worker thread, so typing stays responsive; off by default because the default on-save check (sallaReview.runOnSave) is enough for most workflows."
           },
           "sallaReview.scanOnStartup": {
             "type": "boolean",
@@ -105,7 +105,7 @@
             },
             "default": [],
             "scope": "resource",
-            "markdownDescription": "**Exclude patterns** — matching files and folders are never analyzed (also applies to the merge-conflict scan of `public/` and to the theme-size estimate). Four forms: a folder path (`src/views/components/custom`), a glob (`src/**/*.min.js` — `*` stays within one folder, `**` crosses folders, `?` is one character), a bare name (`legacy` matches any folder or file with that name at any depth), or a regular expression wrapped in slashes (`/\\.min\\.js$/`), tested against the path relative to the theme root with forward slashes. Set per project in the theme's own `.vscode/settings.json`."
+            "markdownDescription": "**Exclude patterns** — matching files and folders are never analyzed (also applies to the theme-size estimate; `public/`, `node_modules/` and `.git/` are always excluded). Four forms: a folder path (`src/views/components/custom`), a glob (`src/**/*.min.js` — `*` stays within one folder, `**` crosses folders, `?` is one character), a bare name (`legacy` matches any folder or file with that name at any depth), or a regular expression wrapped in slashes (`/\\.min\\.js$/`), tested against the path relative to the theme root with forward slashes. Set per project in the theme's own `.vscode/settings.json`."
           }
         }
       },
@@ -117,13 +117,13 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Report user-visible text written directly in Twig, JavaScript, or CSS instead of going through the translation system (trans() in Twig, salla.lang in JS). Covers multi-line markup, JS sinks such as innerHTML/alert/salla.notify, and CSS content properties. Salla rejects themes containing untranslated UI strings."
+            "description": "Report user-visible text written directly in Twig, JavaScript, or CSS instead of going through the translation system (trans() in Twig, salla.lang in JS). Covers multi-line markup, JS sinks such as innerHTML/alert/salla.notify, and CSS content properties. Minified/generated JS and CSS files (*.min.*, or any line longer than 4000 characters) are not scanned for UI text, colors, or security patterns. Salla rejects themes containing untranslated UI strings."
           },
           "sallaReview.checks.jsSyntax": {
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Compile every JavaScript file in-process (no external processes) and report clear syntax errors such as unclosed braces or malformed functions. Module-style files (import/export) are skipped."
+            "description": "Compile every JavaScript file in-process (no external processes) and report clear syntax errors such as unclosed braces or malformed functions. Module-style files (import/export) and minified/generated files (*.min.js, or any line longer than 4000 characters) are skipped."
           },
           "sallaReview.checks.cssBraces": {
             "type": "boolean",
@@ -159,7 +159,7 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Estimate the theme's compressed size (text files divided by 3 + binary files as-is; node_modules and .git excluded) and warn when it exceeds the 1 MB limit Salla applies to public themes."
+            "description": "Estimate the theme's compressed size (text files divided by 3 + binary files as-is; public/, node_modules and .git excluded) and warn when it exceeds the 1 MB limit Salla applies to public themes."
           },
           "sallaReview.checks.twilightManifest": {
             "type": "boolean",
@@ -219,7 +219,7 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Report unresolved Git merge-conflict markers (<<<<<<<, >>>>>>>) in any text file, including files under public/ — conflict markers have appeared in real rejected submissions."
+            "description": "Report unresolved Git merge-conflict markers (<<<<<<<, >>>>>>>) in any scanned source file (public/ is never scanned) — conflict markers have appeared in real rejected submissions."
           }
         }
       },
