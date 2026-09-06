@@ -2,7 +2,7 @@
   "name": "salla-theme-reviewer",
   "displayName": "Salla Theme Reviewer",
   "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "omarmazen",
   "license": "MIT",
   "engines": {
@@ -117,7 +117,7 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Report user-visible text written directly in Twig, JavaScript, or CSS instead of going through the translation system (trans() in Twig, salla.lang in JS). Covers multi-line markup, JS sinks such as innerHTML/alert/salla.notify, and CSS content properties. Minified/generated JS and CSS files (*.min.*, or any line longer than 4000 characters) are not scanned for UI text, colors, or security patterns. Salla rejects themes containing untranslated UI strings."
+            "description": "Report user-visible text written directly in Twig, JavaScript, or CSS instead of going through the translation system (trans() in Twig, salla.lang in JS). Covers multi-line markup, JS sinks such as innerHTML/alert/salla.notify, and CSS content properties. The body of a {% set x %}…{% endset %} capture block is not text rendered to the shopper and is never reported. Minified/generated JS and CSS files (*.min.*, or any line longer than 4000 characters) are not scanned for UI text, colors, or security patterns. Salla rejects themes containing untranslated UI strings."
           },
           "sallaReview.checks.jsSyntax": {
             "type": "boolean",
@@ -165,7 +165,7 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Validate twilight.json structure: every field must have an id; ids may only contain letters, digits, hyphens, underscores, and dots; each component's path must point to an existing Twig file; settings defined but never read anywhere; theme.settings.get() calls that reference an undefined setting; and component fields never used inside their own component file."
+            "description": "Validate twilight.json structure: every field must have an id; ids may only contain letters, digits, hyphens, underscores, and dots; each component's path must point to an existing Twig file; settings defined but never read anywhere; theme.settings.get() calls that reference an undefined setting; and component fields never used inside their own component file or in any template that file includes."
           },
           "sallaReview.checks.cssVariables": {
             "type": "boolean",
@@ -177,7 +177,13 @@
             "type": "boolean",
             "default": false,
             "scope": "resource",
-            "description": "Report literal colors — HEX values and Tailwind palette classes such as text-red-500 — in Twig, JS, CSS, and SCSS. Brand colors should come from theme settings or CSS variables so merchants can customize them. Shown as Information (blue) because themes typically contain hundreds. Not reported: SVG content, var(--x, #fff) fallbacks, HEX defaults inside Twig expressions such as theme.settings.get('id', '#fff'), ternary/|default() fallbacks, and Tailwind classes behind @apply (they resolve through the tailwind config)."
+            "description": "Report literal colors — HEX values and Tailwind palette classes such as text-red-500 — in Twig, JS, CSS, and SCSS. Brand colors should come from theme settings or CSS variables so merchants can customize them. Shown as Information (blue) because themes typically contain hundreds. Default/fallback HEX values inside Twig expressions — theme.settings.get('id', '#fff'), x|default('#fff'), ternary fallbacks — ARE reported: that literal is the color the shopper sees whenever the setting is empty. Not reported: SVG content, var(--x, #fff) CSS fallbacks, and Tailwind classes behind @apply (they resolve through the tailwind config)."
+          },
+          "sallaReview.checks.lockfile": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Verify that the committed lockfile (pnpm-lock.yaml, package-lock.json, or yarn.lock) still matches the dependency versions declared in package.json. Bumping a package — the @salla.sa/twilight ones in particular — without re-running the install leaves the lockfile behind, and every CI install then fails with ERR_PNPM_OUTDATED_LOCKFILE, because --frozen-lockfile is on by default in CI. Each mismatched package is reported on its package.json line. No network needed."
           },
           "sallaReview.checks.twilightVersion": {
             "type": "boolean",
@@ -207,7 +213,7 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Enforce lower-case snake_case names for Twig variables at their declaration sites — {% set %} names, {% for %} loop targets, and {% macro %} names/arguments. Salla's reviewer rejects camelCase names (\"The sectionId variable should be in lower case, use _ as a separator\"), so findings are errors. Each finding offers a Quick Fix (💡) that renames the variable to its snake_case form across the whole file."
+            "description": "Enforce lower-case snake_case names for Twig variables at their declaration sites — {% set %} names, {% for %} loop targets, and {% macro %} names/arguments. Salla's reviewer rejects camelCase variable names (\"The sectionId variable should be in lower case, use _ as a separator\"), so those findings are errors. A macro's own name is only a naming recommendation (Information) — Salla does not reject it. Each finding offers a Quick Fix (💡) that renames the variable to its snake_case form across the whole file."
           },
           "sallaReview.checks.twigDivision": {
             "type": "boolean",
@@ -243,7 +249,7 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Verify that the 15 Twilight components Salla requires (salla-user-menu, salla-cart-coupons, salla-edit-order-button, salla-next-order-coupon, and others) appear somewhere in the theme. Each finding names the component and the file where reference themes place it."
+            "description": "Verify that the 15 Twilight components Salla requires (salla-user-menu, salla-cart-coupons, salla-edit-order-button, salla-next-order-coupon, and others) appear in the file each one belongs to. The reviewer reads that file itself, so a component placed in another file — or reached only through an {% include %} — does not satisfy the requirement and is reported."
           },
           "sallaReview.checks.raedParity": {
             "type": "boolean",

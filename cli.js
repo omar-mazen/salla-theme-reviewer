@@ -90,6 +90,7 @@ const SETTINGS_TO_OPTS = {
     "sallaReview.checks.viteConfig": "viteCheck",
     "sallaReview.checks.bundle": "bundleCheck",
     "sallaReview.checks.structure": "structureCheck",
+    "sallaReview.checks.lockfile": "lockfileCheck",
     "sallaReview.checks.twilightManifest": "twilightManifestCheck",
     "sallaReview.checks.cssVariables": "cssVarCheck",
     "sallaReview.checks.colors": "colorCheck",
@@ -130,6 +131,7 @@ const flagOpts = {
     viteCheck: !flags.has("--no-vite"),
     bundleCheck: !flags.has("--no-bundle"),
     structureCheck: !flags.has("--no-structure"),
+    lockfileCheck: !flags.has("--no-lockfile"),
     twilightManifestCheck: !flags.has("--no-manifest"),
     cssVarCheck: !flags.has("--no-cssvars"),
     colorCheck: !flags.has("--no-colors"),
@@ -187,7 +189,7 @@ const GH_CHECK_ROWS = [
     ["Theme configuration (twilight.json)", ["Twilight Manifest"]],
     ["Security & policy", ["Security", "Custom Code", "Misleading UX (Social Proof/Urgency)"]],
     ["Merge conflicts", ["Merge Conflict"]],
-    ["Twilight packages", ["Twilight Version"]],
+    ["Twilight packages", ["Twilight Version", "Lockfile"]],
     ["Custom rules", ["Custom Rule"]],
     ["Style quality", ["Hardcoded Color", "CSS Variables", "Theme Size", "Vite Config", "Bundle i18n", "Bundle Quality"]],
 ];
@@ -200,7 +202,7 @@ const GH_FIX_HINTS = {
     "Theme configuration (twilight.json)": "Fix the annotated twilight.json fields (ids, paths, unused/undefined settings), then push again.",
     "Security & policy": "Remove external requests, injected settings, and fake-engagement claims at the annotated lines.",
     "Merge conflicts": "Resolve the conflict markers at the annotated lines and commit the resolved files.",
-    "Twilight packages": "npm install @salla.sa/twilight-tailwind-theme @salla.sa/twilight-components @salla.sa/twilight && npm run prod, then push the built assets.",
+    "Twilight packages": "Run your package manager install (pnpm install / npm install) so the lockfile matches package.json, then npm run prod, and push the lockfile together with the built assets.",
     "Style quality": "Use theme settings / CSS variables for the annotated values.",
     "Custom rules": "These are your team's own rules from salla-rules.json — fix the annotated lines or adjust the rule.",
 };

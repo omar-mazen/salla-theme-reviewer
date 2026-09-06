@@ -10,7 +10,7 @@ turns the same checks into commit, push, and pull-request gates for your whole t
 > Diagnostics and reports are in Arabic on purpose — they match the language of Salla's
 > review feedback, so you can compare findings one-to-one with official rejection notes.
 
-- ⚡ Non-blocking: the whole analysis runs on a dedicated worker thread — the editor, the Git view, and other extensions never wait for it. Saving a file re-checks it in a few milliseconds and only the files whose findings changed are updated in the Problems panel (live as-you-type checking available via `sallaReview.runOnType`). Timings for every scan and refresh are logged in the **Salla Review** output channel. Theme discovery uses the workspace search, so folders hidden by `files.exclude` are not scanned.
+- ⚡ Non-blocking: the whole analysis runs on a dedicated worker thread — the editor, the Git view, and other extensions never wait for it. Saving a file re-checks it in a few milliseconds and only the files whose findings changed are updated in the Problems panel (live as-you-type checking available via `sallaReview.runOnType`). Files changed outside the editor (an AI agent, `git checkout`, a formatter run in the terminal) are re-checked automatically — no reload needed. Timings for every scan and refresh are logged in the **Salla Review** output channel. Theme discovery uses the workspace search, so folders hidden by `files.exclude` are not scanned.
 - 📴 Private: everything runs locally; internet is used only for the npm version check and reference updates
 - 🧩 Works with classic themes (`twilight.json`) and component bundles (`twilight-bundle.json`)
 
@@ -36,13 +36,13 @@ review, 🔵 is advisory.
 ### Texts & translation
 | | Check |
 |---|---|
-| 🔴 | **Hardcoded UI texts** — user-visible strings not going through `trans()` (Twig) or `salla.lang` (JS). Catches multi-line markup, `innerHTML`/`alert`/`salla.notify`/jQuery sinks, and CSS `content:`. Attributes (`alt`, `placeholder`…), comments, hidden elements, and `<salla-*>` markup are never reported |
+| 🔴 | **Hardcoded UI texts** — user-visible strings not going through `trans()` (Twig) or `salla.lang` (JS). Catches multi-line markup, `innerHTML`/`alert`/`salla.notify`/jQuery sinks, and CSS `content:`. Attributes (`alt`, `placeholder`…), comments, `{% set x %}…{% endset %}` capture blocks, hidden elements, and `<salla-*>` markup are never reported |
 
 ### Twig
 | | Check |
 |---|---|
 | 🔴 | **Block balance** — `{% if %}` / `{% for %}` / `{% macro %}`… left unclosed, closed without an opener, or mismatched (`endfor` closing an `if`) |
-| 🔴 | **Variable naming** — Twig variables must be lower-case snake_case (`sectionId` → `section_id`); checked at `{% set %}`, `{% for %}` targets, and `{% macro %}` names/arguments, with a Quick Fix that renames across the file |
+| 🔴 | **Variable naming** — Twig variables must be lower-case snake_case (`sectionId` → `section_id`); checked at `{% set %}`, `{% for %}` targets, and `{% macro %}` arguments, with a Quick Fix that renames across the file. A macro's own name is a 🔵 recommendation only |
 | 🔴 | **Unsafe division** — dividing by a `|length`-derived variable with no `max(1, x)` or `{% if %}` guard (crashes the page on empty lists) |
 | 🔴 | **Merge conflict markers** — unresolved `<<<<<<<` in any scanned source file (`public/` is never scanned) |
 
@@ -51,9 +51,10 @@ review, 🔵 is advisory.
 |---|---|
 | 🔴 | **salla-scopes placement** — must appear exactly once, in `master.twig` |
 | 🔴 | **Required hooks** — the 8 hooks Salla demands in product and page templates |
-| 🔴 | **Required components** — the 15 `salla-*` components Salla expects (user menu, cart coupons, order buttons, …) |
+| 🔴 | **Required components** — the 15 `salla-*` components Salla expects (user menu, cart coupons, order buttons, …), each in the file it belongs to: the reviewer reads that file, so a component reached only through an `{% include %}` does not count |
 | 🔴 | **Theme structure** — the `public/` build output must exist in the repository |
 | 🔴 | **Twilight package versions** — `@salla.sa/twilight*` must be within 5 releases of the npm latest |
+| 🔴 | **Lockfile in sync** — `pnpm-lock.yaml` / `package-lock.json` / `yarn.lock` must match the versions in `package.json`. Bumping a package without re-running the install fails every CI install with `ERR_PNPM_OUTDATED_LOCKFILE` (`--frozen-lockfile` is the CI default) |
 
 ### twilight.json
 | | Check |
@@ -72,7 +73,7 @@ review, 🔵 is advisory.
 |---|---|
 | 🔴 | **JS syntax** and **CSS/SCSS brace balance** (brace balance off by default — `sallaReview.checks.cssBraces`) |
 | 🟡 | **CSS variables** — defined but never used, or used but never defined (definitions in Twig, CSS, and JS all count). Off by default — `sallaReview.checks.cssVariables` |
-| 🔵 | **Hardcoded colors** — HEX values and Tailwind palette classes that should come from theme settings. Off by default — `sallaReview.checks.colors` |
+| 🔵 | **Hardcoded colors** — HEX values and Tailwind palette classes that should come from theme settings, including the defaults inside `theme.settings.get('id', '#fff')` and `\|default('#fff')`. Off by default — `sallaReview.checks.colors` |
 | 🟡 | **Theme size** — estimated compressed size vs. Salla's 1 MB limit |
 
 Bundle projects additionally get: multilanguage fields without a `localizedString` resolver,

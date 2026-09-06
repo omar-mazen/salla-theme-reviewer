@@ -290,8 +290,9 @@ const a = 2;
         && !descHas("Twilight Hooks", "product.single.before_customer_reviews'"), "هوكس ناقصة في single.twig تُكتشف والموجودة لا تُذكر");
     assert(!byType("Twilight Hooks").some((i) => i.file.endsWith("index.twig")), "index.twig كاملة الهوكس — لا بلاغ");
     assert(descHas("Twilight Hooks", "page-single.twig"), "ملف page-single.twig المفقود يُبلَّغ عنه");
-    assert(!descHas("Twilight Components", "salla-user-menu"), "salla-user-menu موجود — لا بلاغ");
+    assert(!descHas("Twilight Components", "salla-user-menu"), "salla-user-menu موجود في ملفه — لا بلاغ");
     assert(descHas("Twilight Components", "salla-cart-coupons"), "salla-cart-coupons مفقود — بلاغ");
+    assert(descHas("Twilight Components", "salla-search"), "مكوّن ناقص في ملف موجود (header.twig) يُبلَّغ");
     assert(byType("Misleading UX (Social Proof/Urgency)").some((i) => i.severity === "error"), "عبارة «يشاهدون هذا المنتج» = خطأ صريح بدون Math.random");
     assert(byType("Twig Division").length === 1 && byType("Twig Division")[0].file.endsWith("div.twig"), "قسمة غير آمنة تُكتشف والمؤمّنة بـ max() لا");
     assert(descHas("Twilight Components", "pull/581"), "salla-products-slider ببناء يدوي → مرجع PR 581");
@@ -485,9 +486,11 @@ const x = getComputedStyle(el).getPropertyValue('--js-var');`,
     });
     const colors = issues.filter((i) => i.type === "Hardcoded Color");
     const colorHas = (s) => colors.some((i) => (i.desc || "").includes(s));
-    assert(!colorHas("#eeeeee") && !colorHas("#000"), "hex كافتراضي في theme.settings.get لا يُبلَّغ");
-    assert(!colorHas("#ffffff"), "hex كبديل في شرط ثلاثي داخل twig لا يُبلَّغ");
-    assert(!colorHas("#fafafa"), "hex داخل |default() لا يُبلَّغ");
+    // Fallback/default hexes ARE hardcoded colors: they are what the shopper sees
+    // whenever the setting is unset, so they belong in a theme variable.
+    assert(colorHas("#eeeeee") && colorHas("#000"), "hex كافتراضي في theme.settings.get يُبلَّغ");
+    assert(colorHas("#ffffff"), "hex كبديل في شرط ثلاثي داخل twig يُبلَّغ");
+    assert(colorHas("#fafafa"), "hex داخل |default() يُبلَّغ");
     assert(colorHas("#ab12cd"), "{% set x = '#hex' %} بلا بديل ديناميكي يُبلَّغ");
     assert(!colorHas("border-gray-200") && !colorHas("bg-red-500"), "أصناف Tailwind بعد @apply لا تُبلَّغ");
     assert(colorHas("#12ab34"), "hex عادي في scss يُبلَّغ");
@@ -525,7 +528,11 @@ console.log("\n3.76) تسمية متغيرات Twig (snake_case):");
     const naming = issues.filter((i) => i.type === "Twig Naming");
     const fixOf = (from) => naming.find((i) => i.fix && i.fix.from === from);
     assert(naming.length === 6, `كل التصريحات بصيغة camelCase مرصودة (6) — الفعلي: ${naming.length}`);
-    assert(naming.every((i) => core.issueSeverity(i) === "error"), "تسمية Twig مخالفة = خطأ (سبب رفض)");
+    // Variables (set / for / macro arguments) are a documented rejection reason;
+    // a macro's own name is only a recommendation.
+    assert(naming.filter((i) => core.issueSeverity(i) === "error").length === 5,
+        `تسمية المتغيرات المخالفة = خطأ (سبب رفض) — الفعلي: ${naming.filter((i) => core.issueSeverity(i) === "error").length}`);
+    assert(core.issueSeverity(fixOf("searchButton")) === "info", "اسم الماكرو = توصية (معلومة)");
     assert(fixOf("sectionId") && fixOf("sectionId").fix.to === "section_id", 'اقتراح التصحيح: sectionId → section_id');
     assert(fixOf("columnsMobile") && fixOf("columnsMobile").fix.to === "columns_mobile", 'اقتراح التصحيح: columnsMobile → columns_mobile');
     assert(fixOf("isMobileOnlySlider") && fixOf("isMobileOnlySlider").fix.to === "is_mobile_only_slider", "camelCase متعدد المقاطع يُحوَّل بشكل صحيح");
@@ -1101,6 +1108,190 @@ console.log("\n5) التقرير:");
     assert(empty.includes("لم يتم العثور على أي مخالفة"), "تقرير نظيف يصرّح بذلك بوضوح");
 }
 
+/* ============== 3.14) set-blocks, macro naming, includes, strict components ============== */
+
+console.log("\n3.14) بلوكات set والماكرو والملفات المُضمَّنة:");
+{
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": JSON.stringify({
+            name: "inc",
+            settings: [],
+            components: [{
+                key: "home.cards", path: "home.cards", title: { en: "Cards" },
+                fields: [
+                    { id: "custom_colors", type: "boolean" },
+                    { id: "card_title", type: "string" },
+                    { id: "deep_field", type: "string" },
+                    { id: "never_used", type: "string" },
+                ],
+            }],
+        }),
+        // The block form {% set x %}…{% endset %} captures CSS — not UI text
+        "src/views/components/home/cards.twig": `{% set style_tokens %}
+	--cs-wave-color: var(--store-bg);
+	--cs-title-color: {{ c.custom_colors ? c.title_color|default('#090909') : 'var(--color-primary)' }};
+{% endset %}
+{% set inline_value = 'x' %}
+{% include 'components/home/cards-item.twig' %}`,
+        // Fields are read in the included partial, and one level deeper
+        "src/views/components/home/cards-item.twig": `<h2>{{ c.card_title }}</h2>
+{% macro productCard(itemData) %}{% endmacro %}
+{% include 'components/home/cards-deep.twig' %}`,
+        "src/views/components/home/cards-deep.twig": `<p>{{ component.deep_field }}</p>`,
+    });
+    const opts = { raedParity: false, nodeSyntaxCheck: false, requiredHooks: false, requiredComponents: false, sizeCheck: false, structureCheck: false, scopesCheck: false, cssVarCheck: false, colorCheck: true };
+    const { issues } = core.analyzeTheme(theme, opts);
+    const ofType = (t) => issues.filter((i) => i.type === t);
+    const has = (t, s) => ofType(t).some((i) => (i.desc || i.visible || "").includes(s));
+
+    assert(!ofType("UI hard-coded text").length, "جسم {% set %}…{% endset %} ليس نص واجهة");
+    assert(has("Hardcoded Color", "#090909"), "الألوان داخل بلوك set تبقى مرصودة");
+
+    const naming = ofType("Twig Naming");
+    const macroName = naming.find((i) => (i.desc || "").includes('"productCard"'));
+    const macroArg = naming.find((i) => (i.desc || "").includes('"itemData"'));
+    assert(macroName && core.issueSeverity(macroName) === "info", "اسم الماكرو بحروف كبيرة = توصية (معلومة) لا خطأ");
+    assert(/التصحيح:\s*"product_card"/.test(macroName.desc), "توصية الماكرو تحافظ على صيغة الإصلاح السريع");
+    assert(macroArg && core.issueSeverity(macroArg) === "error", "وسيط الماكرو متغير — يبقى خطأ");
+
+    const manifest = ofType("Twilight Manifest");
+    const unused = (id) => manifest.some((i) => (i.desc || "").includes(`"${id}"`));
+    assert(!unused("card_title"), "حقل مستخدم في ملف مُضمَّن لا يُعد غير مستخدم");
+    assert(!unused("deep_field"), "حقل مستخدم في ملف مُضمَّن على مستويين لا يُعد غير مستخدم");
+    assert(unused("never_used"), "حقل غير مستخدم في أي ملف يبقى مُبلَّغاً");
+    cleanup();
+}
+{
+    // Required components must be in the mapped file itself — an include does not satisfy them
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": '{"name":"strict"}',
+        "src/views/components/header/header.twig": `<header>
+{% include 'components/header/menu.twig' %}
+<salla-cart-summary></salla-cart-summary>
+</header>`,
+        "src/views/components/header/menu.twig": `<salla-user-menu></salla-user-menu><salla-search></salla-search>`,
+    });
+    const { issues } = core.analyzeTheme(theme, {
+        raedParity: false, nodeSyntaxCheck: false, requiredHooks: false, sizeCheck: false,
+        structureCheck: false, scopesCheck: false, cssVarCheck: false, colorCheck: false, twilightManifestCheck: false,
+    });
+    const comps = issues.filter((i) => i.type === "Twilight Components");
+    const missing = (c) => comps.some((i) => (i.desc || "").includes(`<${c}>`));
+    assert(missing("salla-user-menu") && missing("salla-search"), "مكوّن مطلوب داخل ملف مُضمَّن فقط = بلاغ (يجب أن يرد في الملف نفسه)");
+    assert(!missing("salla-cart-summary"), "المكوّن الموجود في الملف نفسه لا يُبلَّغ");
+    assert(comps.some((i) => i.file.endsWith("header.twig")), "البلاغ مثبَّت على الملف المطلوب");
+    cleanup();
+}
+
+/* ============== 3.15) Lockfile in sync with package.json ============== */
+
+console.log("\n3.15) تطابق ملف القفل مع package.json:");
+{
+    const base = {
+        raedParity: false, nodeSyntaxCheck: false, requiredHooks: false, requiredComponents: false,
+        sizeCheck: false, structureCheck: false, scopesCheck: false, twilightManifestCheck: false,
+        uiTextCheck: false, colorCheck: false, cssVarCheck: false,
+    };
+    const PKG = JSON.stringify({
+        name: "theme",
+        dependencies: { "@salla.sa/twilight": "^2.14.572", "@salla.sa/twilight-components": "^2.14.572", lodash: "^4.17.21" },
+        devDependencies: { vite: "^5.0.0" },
+    }, null, 2);
+    const PNPM = (tw) => `lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    dependencies:
+      '@salla.sa/twilight':
+        specifier: ${tw}
+        version: 2.14.569
+      '@salla.sa/twilight-components':
+        specifier: ^2.14.572
+        version: 2.14.572
+      lodash:
+        specifier: ^4.17.21
+        version: 4.17.21
+    devDependencies:
+      vite:
+        specifier: ^5.0.0
+        version: 5.0.0
+
+packages:
+
+  '@salla.sa/twilight@2.14.569':
+    resolution: {integrity: sha512-x}
+`;
+    const lockOf = (theme, opts) =>
+        core.analyzeTheme(theme, { ...base, ...opts }).issues.filter((i) => i.type === "Lockfile");
+    const named = (list) => list.map((i) => (i.desc.match(/"([^"]+)"/) || [])[1]);
+
+    // The reported CI failure: package.json bumped, lockfile left behind
+    {
+        const { theme, cleanup } = makeTheme({ "twilight.json": '{"name":"lk"}', "package.json": PKG, "pnpm-lock.yaml": PNPM("^2.14.569") });
+        const found = lockOf(theme);
+        assert(found.length === 1 && named(found)[0] === "@salla.sa/twilight", `عدم تطابق pnpm-lock يُبلَّغ عن الحزمة المتأخرة فقط — الفعلي: ${named(found).join(",")}`);
+        assert(core.issueSeverity(found[0]) === "error", "عدم تطابق القفل = خطأ (يفشل التثبيت في CI)");
+        assert(found[0].file.endsWith("package.json") && found[0].line === 4, "البلاغ على سطر الحزمة في package.json");
+        assert(/ERR_PNPM_OUTDATED_LOCKFILE/.test(found[0].desc) && /pnpm install/.test(found[0].desc), "الرسالة تذكر خطأ CI وأمر الإصلاح");
+        assert(lockOf(theme, { lockfileCheck: false }).length === 0, "lockfileCheck:false يعطّل الفحص");
+        cleanup();
+    }
+    // In sync → silent
+    {
+        const { theme, cleanup } = makeTheme({ "twilight.json": '{"name":"lk"}', "package.json": PKG, "pnpm-lock.yaml": PNPM("^2.14.572") });
+        assert(lockOf(theme).length === 0, "قفل متطابق = لا بلاغ");
+        cleanup();
+    }
+    // A dependency missing from the lockfile entirely
+    {
+        const { theme, cleanup } = makeTheme({
+            "twilight.json": '{"name":"lk"}', "package.json": PKG,
+            "pnpm-lock.yaml": PNPM("^2.14.572").replace(/      lodash:\n        specifier: \^4\.17\.21\n        version: 4\.17\.21\n/, ""),
+        });
+        const found = lockOf(theme);
+        assert(found.length === 1 && named(found)[0] === "lodash" && /غير موجودة/.test(found[0].desc), "حزمة غير مسجّلة في القفل تُبلَّغ");
+        cleanup();
+    }
+    // yarn.lock and npm lockfile v3
+    {
+        const { theme, cleanup } = makeTheme({
+            "twilight.json": '{"name":"lk"}', "package.json": PKG,
+            "yarn.lock": `"@salla.sa/twilight@^2.14.569":\n  version "2.14.569"\n"@salla.sa/twilight-components@^2.14.572":\n  version "2.14.572"\nlodash@^4.17.21:\n  version "4.17.21"\nvite@^5.0.0:\n  version "5.0.0"\n`,
+        });
+        assert(named(lockOf(theme)).join() === "@salla.sa/twilight", "yarn.lock: يُقرأ المُحدِّد من ترويسة المدخل");
+        cleanup();
+    }
+    {
+        const { theme, cleanup } = makeTheme({
+            "twilight.json": '{"name":"lk"}', "package.json": PKG,
+            "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": { dependencies: { "@salla.sa/twilight": "^2.14.569", "@salla.sa/twilight-components": "^2.14.572", lodash: "^4.17.21" }, devDependencies: { vite: "^5.0.0" } } } }),
+        });
+        assert(named(lockOf(theme)).join() === "@salla.sa/twilight", "package-lock v3: يُقرأ المُحدِّد من packages[\"\"]");
+        cleanup();
+    }
+    // Formats that record no specifiers, and a missing lockfile: stay silent rather than invent errors
+    for (const [label, files] of [
+        ["package-lock v1", { "package-lock.json": JSON.stringify({ lockfileVersion: 1, dependencies: { lodash: { version: "4.17.21" } } }) }],
+        ["قفل بصيغة غير معروفة", { "package-lock.json": '{"lockfileVersion":9}' }],
+        ["بلا ملف قفل", {}],
+    ]) {
+        const { theme, cleanup } = makeTheme({ "twilight.json": '{"name":"lk"}', "package.json": PKG, ...files });
+        assert(lockOf(theme).length === 0, `${label} → صمت (لا إنذارات مخترَعة)`);
+        cleanup();
+    }
+    // Incremental: running the install (updating the lockfile) clears the findings
+    {
+        const { theme, cleanup } = makeTheme({ "twilight.json": '{"name":"lk"}', "package.json": PKG, "pnpm-lock.yaml": PNPM("^2.14.569") });
+        const state = core.createThemeState(theme, base);
+        assert(core.stateIssues(state).filter((i) => i.type === "Lockfile").length === 1, "الحالة التزايدية ترصد التعارض");
+        fs.writeFileSync(path.join(theme, "pnpm-lock.yaml"), PNPM("^2.14.572"));
+        core.refreshFileInState(state, path.join(theme, "pnpm-lock.yaml"));
+        assert(core.stateIssues(state).filter((i) => i.type === "Lockfile").length === 0, "حفظ ملف القفل المحدَّث يزيل البلاغ فوراً");
+        cleanup();
+    }
+}
+
 /* ==================== 6) Engine host + worker thread (what the editor talks to) ==================== */
 
 async function testEngine() {
@@ -1150,6 +1341,46 @@ async function testEngine() {
 
     const back = await eng.handle({ type: "refreshFiles", root: theme, files: [{ file: master, liveText: null }], opts });
     assert(back.changed.length === 1 && back.changed[0][0] === master && back.removed.length === 0, "العودة للقرص تعيد نتائج الملف فقط (changed)");
+
+    // An external tool (an AI agent, git checkout, a formatter) rewrites files on
+    // disk: no editor save happens, so the engine must pick the change up from a
+    // plain refresh — this is what left the Problems panel stale until a reload.
+    {
+        const a = path.join(theme, "src", "views", "pages", "a.twig");
+        const before = (await eng.handle({ type: "refreshFiles", root: theme, files: [], opts })).counts;
+        fs.writeFileSync(a, `<p>{{ trans('a.hello') }}</p>`, "utf8");            // finding fixed on disk
+        fs.writeFileSync(master, `<salla-scopes></salla-scopes>{% set ok_name = 1 %}`, "utf8");
+        const batch = await eng.handle({
+            type: "refreshFiles", root: theme, opts,
+            files: [{ file: a, liveText: null }, { file: master, liveText: null }],
+        });
+        assert(batch.removed.length === 2 && batch.removed.includes(a) && batch.removed.includes(master),
+            `تعديل الملفات على القرص بلا حفظ من المحرر يُحدِّث النتائج (removed: ${batch.removed.length})`);
+        // The two fixed errors (a hardcoded text and a camelCase variable) leave the
+        // counters; unrelated findings elsewhere in the theme stay untouched.
+        assert(batch.counts.errors === before.errors - 2,
+            `النتائج المُصلحة على القرص تختفي من العدّادات (${before.errors} → ${batch.counts.errors})`);
+        // …and back again, in one round-trip for the whole batch
+        fs.writeFileSync(a, `<p>Hello world</p>`, "utf8");
+        fs.writeFileSync(master, `<salla-scopes></salla-scopes>{% set fooBar = 1 %}`, "utf8");
+        const back = await eng.handle({
+            type: "refreshFiles", root: theme, opts,
+            files: [{ file: a, liveText: null }, { file: master, liveText: null }],
+        });
+        assert(back.changed.length === 2, `دفعة واحدة تعيد نتائج الملفين معاً (${back.changed.length})`);
+    }
+
+    // A batch refresh must equal refreshing the files one by one
+    {
+        const files = [path.join(theme, "src", "views", "pages", "a.twig"), master];
+        const key = (i) => `${i.type}|${i.file}|${i.line}|${i.desc || ""}|${i.visible || ""}`;
+        const one = core.createThemeState(theme, opts);
+        for (const f of files) core.refreshFileInState(one, f);
+        const many = core.createThemeState(theme, opts);
+        core.refreshFilesInState(many, files);
+        assert(core.stateIssues(one).map(key).sort().join("\n") === core.stateIssues(many).map(key).sort().join("\n"),
+            "refreshFilesInState (تمريرة واحدة للفحوصات المشتركة) = تحديث الملفات فرادى");
+    }
 
     const rep = await eng.handle({ type: "report", root: theme, slug: "w", displayBase: theme, raedParity: false, extraIssues: [] });
     assert(typeof rep.markdown === "string" && rep.markdown.includes("Twig Naming"), "التقرير يُبنى داخل المحرك");

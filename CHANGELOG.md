@@ -1,5 +1,88 @@
 # Changelog
 
+## 1.4.0
+
+### Fixed: stale findings after an edit made outside the editor
+
+Findings for code that no longer existed stayed in the Problems panel until the
+window was reloaded, whenever a file was changed by anything other than an
+editor save — an AI agent editing files, `git checkout` / `stash` / `pull`, a
+formatter or codemod run from the terminal, or `pnpm install` rewriting a
+lockfile. The per-theme file watcher was created with change events ignored, so
+only `create` and `delete` reached the engine and edits were seen exclusively
+through `onDidSaveTextDocument`. It now watches changes as well, and re-checks
+the affected files straight away.
+
+A file being edited live (`sallaReview.runOnType`) with unsaved changes keeps
+its editor buffer as the source of truth, so an external write cannot make the
+findings jump to line numbers the editor is not showing.
+
+Refreshing many files at once — exactly what an agent edit or a branch switch
+produces — now runs the cross-file checks **once for the whole batch** instead
+of once per file (a 40-file batch: 171 ms → 70 ms, identical results).
+
+### New check: lockfile in sync with package.json
+
+Bumping a dependency — the `@salla.sa/twilight*` packages in particular, which
+this extension itself tells you to update — without re-running the package
+manager leaves the lockfile behind, and the theme's CI then dies on install
+before a single check runs:
+
+```
+ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with "frozen-lockfile" because
+pnpm-lock.yaml is not up to date with <ROOT>/package.json
+* 2 dependencies are mismatched:
+  - @salla.sa/twilight (lockfile: ^2.14.569, manifest: ^2.14.572)
+```
+
+`sallaReview.checks.lockfile` (on by default, no network) compares every
+dependency declared in `package.json` against the specifier recorded in the
+committed lockfile and reports each mismatched package on its own
+`package.json` line, as an error — so the editor, the pre-commit and pre-push
+hooks, and the generated GitHub workflow all catch it before CI does. Saving the
+refreshed lockfile clears the findings immediately.
+
+- Supports `pnpm-lock.yaml` (v5 `specifiers:` and v6/v9 `importers:` layouts),
+  `package-lock.json` (v2/v3), and `yarn.lock` (classic and Berry).
+- A package declared in `package.json` but absent from the lockfile is reported
+  too, with the same fix.
+- Lockfile formats that record no specifiers (npm lockfile v1) and unrecognized
+  files are skipped silently rather than reported as mismatches.
+- The Twilight Version finding now spells out the follow-up: run the install so
+  the lockfile moves with the bump, and commit it alongside the built assets.
+
+### Check accuracy
+
+- **`{% set x %}…{% endset %}` capture blocks are no longer read as UI text.**
+  The body of a capture block (typically a bundle of CSS custom properties) is a
+  value assigned to a variable, not text rendered to the shopper — it used to be
+  reported as a hardcoded UI string. The assignment form `{% set x = … %}` is
+  unaffected, and colors inside the block are still checked.
+- **Default/fallback colors are now reported as hardcoded colors.** A HEX inside
+  `theme.settings.get('id', '#fff')`, `x|default('#fff')` or a ternary fallback
+  is the color the shopper actually sees whenever the setting is empty, so it
+  belongs in a theme variable like any other literal. These were previously
+  skipped. Information-level, and the check stays off by default
+  (`sallaReview.checks.colors`). `var(--x, #fff)` CSS fallbacks are unchanged.
+- **A macro's own name is a recommendation, not an error.** Salla's rejection
+  wording covers *variables*; `{% macro searchButton() %}` has not been rejected
+  for its name. It is now Information ("recommended: `search_button`") and keeps
+  its rename Quick Fix. Macro *arguments* are variables and stay errors.
+- **Component fields used in an included template count as used.** A component
+  that renders through a partial and passes its twilight fields down
+  (`{% include %}`, `{% embed %}`, `{% import %}`, `{% from %}`, `{% use %}`, and
+  the `include()` function, followed transitively) no longer produces "field
+  defined but never used" for every field. Applies to home components, templates
+  and custom sections alike.
+- **Required components must be in their own file.** The reviewer reads the file
+  itself, so a required `<salla-*>` element placed in a different file — or
+  reached only through an `{% include %}` — is a rejection. The check no longer
+  accepts the component anywhere in the theme; it must be in the file it is
+  mapped to (required hooks already worked this way).
+- **The status bar and the Problems panel now agree.** The counter excluded
+  Information-level findings while the panel listed them; it now shows
+  `errors 🔴 warnings 🟡 infos 🔵` and its tooltip states the panel total.
+
 ## 1.3.0
 
 ### Performance — nothing blocks the editor any more

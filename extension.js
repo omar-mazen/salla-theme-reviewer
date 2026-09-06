@@ -104,6 +104,7 @@ function readConfig(scopeUri) {
         viteConfig: check("viteConfig"),
         bundle: check("bundle"),
         structure: check("structure"),
+        lockfile: check("lockfile"),
         twilightManifest: check("twilightManifest", "twilightManifestCheck"),
         cssVariables: check("cssVariables", "cssVarCheck", false),
         colors: check("colors", "colorCheck", false),
@@ -138,6 +139,7 @@ function engineOpts(cfg) {
         viteCheck: cfg.viteConfig,
         bundleCheck: cfg.bundle,
         structureCheck: cfg.structure,
+        lockfileCheck: cfg.lockfile,
         twilightManifestCheck: cfg.twilightManifest,
         cssVarCheck: cfg.cssVariables,
         colorCheck: cfg.colors,
@@ -320,21 +322,34 @@ function resetShown() {
     }
 }
 
+/**
+ * The status bar mirrors what the Problems panel shows for this extension —
+ * every severity, informational findings included. Counting only errors and
+ * warnings here made the two disagree whenever an Information-level check
+ * (hardcoded colors, macro naming) had findings.
+ */
 function updateStatusBar() {
-    let errors = 0, warnings = 0;
+    let errors = 0, warnings = 0, infos = 0;
     for (const entry of roots.values()) {
         if (entry.counts) {
             errors += entry.counts.errors;
             warnings += entry.counts.warnings;
+            infos += entry.counts.infos;
         }
         for (const i of entry.versionIssues) {
-            if (core.issueSeverity(i) === "error") errors++;
-            else warnings++;
+            const sev = core.issueSeverity(i);
+            if (sev === "error") errors++;
+            else if (sev === "warning") warnings++;
+            else infos++;
         }
     }
-    const total = errors + warnings;
-    statusItem.text = total > 0 ? `$(warning) Salla: ${errors}🔴 ${warnings}🟡` : "$(check) Salla";
-    statusItem.tooltip = total > 0 ? `Salla Review: ${errors} خطأ، ${warnings} تحذير` : "Salla Review: لا توجد مشاكل";
+    const total = errors + warnings + infos;
+    const parts = [`${errors}🔴`, `${warnings}🟡`];
+    if (infos) parts.push(`${infos}🔵`);
+    statusItem.text = total > 0 ? `$(warning) Salla: ${parts.join(" ")}` : "$(check) Salla";
+    statusItem.tooltip = total > 0
+        ? `Salla Review: ${errors} خطأ، ${warnings} تحذير، ${infos} معلومة (${total} في لوحة Problems)`
+        : "Salla Review: لا توجد مشاكل";
     statusItem.show();
 }
 
@@ -438,19 +453,42 @@ async function pickRoot(placeHolder) {
     return pick ? pick.root : null;
 }
 
-// .json is included so saving the custom rules file re-applies the rules immediately
-const RELEVANT_FILE_RE = /\.(twig|js|css|scss|json)$/i;
+// .json is included so saving the custom rules file re-applies the rules immediately;
+// the lockfiles are watched so a pnpm/npm/yarn install clears the mismatch findings.
+const RELEVANT_FILE_RE = /(?:\.(twig|js|css|scss|json)|[\\/](?:pnpm-lock\.yaml|yarn\.lock))$/i;
 
-/** One watcher per theme root for create/delete (saves cover edits); scoped so unrelated folders cost nothing */
+/**
+ * One watcher per theme root, scoped so unrelated folders cost nothing.
+ *
+ * Change events matter as much as create/delete: a file edited on disk by
+ * anything other than this editor — an AI agent, a git checkout or stash, a
+ * formatter run from the terminal, npm/pnpm rewriting a lockfile — fires no
+ * onDidSaveTextDocument, so without this the Problems panel kept showing
+ * findings for code that no longer existed until the window was reloaded.
+ */
 function ensureWatcher(entry, root) {
     if (entry.watcher) return;
     const w = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(vscode.Uri.file(root), "**/*.{twig,js,css,scss,json}"),
-        false, true, false
+        new vscode.RelativePattern(vscode.Uri.file(root), "**/{*.twig,*.js,*.css,*.scss,*.json,pnpm-lock.yaml,yarn.lock}")
     );
-    w.onDidCreate((uri) => scheduleIncremental(uri.fsPath));
-    w.onDidDelete((uri) => scheduleIncremental(uri.fsPath));
+    w.onDidCreate((uri) => onDiskChange(uri.fsPath));
+    w.onDidChange((uri) => onDiskChange(uri.fsPath));
+    w.onDidDelete((uri) => onDiskChange(uri.fsPath));
     entry.watcher = w;
+}
+
+/**
+ * A file changed on disk. Normally the on-disk content is what we analyze; the
+ * exception is a file the user is editing live (runOnType) whose buffer is still
+ * dirty — there the buffer stays authoritative, otherwise the findings would
+ * jump to line numbers the editor is not showing.
+ */
+function onDiskChange(fsPath) {
+    const dirtyDoc = liveFiles.has(fileKey(fsPath))
+        ? vscode.workspace.textDocuments.find(
+            (d) => d.uri.scheme === "file" && d.isDirty && fileKey(d.uri.fsPath) === fileKey(fsPath))
+        : undefined;
+    scheduleIncremental(fsPath, dirtyDoc);
 }
 
 function removeRoot(root) {
