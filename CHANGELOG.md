@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.8.1
+
+### False positives found by testing against 20 shipped themes
+
+Running the new checks over twenty real Salla themes surfaced four ways they
+reported problems that were not there. Every fix is covered by a regression test.
+
+- **Dot-notation template paths.** Twilight addresses templates as
+  `{% extends "layouts.master" %}`, not with slashes — 864 uses to 1 across the
+  20 themes. The new reference check only understood slash paths and reported
+  **698 non-existent problems**; both forms (and the hybrid
+  `components.custom.button.twig`) now resolve. The same resolver backs the
+  include-following added in 1.6.0, which therefore never worked on a real
+  theme either.
+- A path concatenated at render time (`{% include "pages." ~ name %}`) is no
+  longer reported: the operator sits outside the quotes, so the captured
+  fragment ends on a separator.
+- **`limit` / `json_encode` are required only of section-driven components.**
+  Checklist §8 describes the homepage sections; a listing wired to a fixed
+  source (`source="latest"`, `source="wishlist"`) or to a single page id on a
+  brand or category page is a different, legitimate usage.
+- **`salla-order-totals-card` is an order-page component.** The checklist text
+  groups it under "Cart", but 18 of the 20 themes place it in
+  `customer/orders/single.twig` and none in `cart.twig`.
+- `theme.settings.get("id", fallback)` on an undefined setting is now a warning
+  saying the value always falls back and the merchant gets no control — not an
+  error claiming it "returns empty", which was untrue whenever a default is passed.
+
+Two findings independently reproduced live rejection emails: an unclosed
+`{% block %}` at `loyalty.twig:36`, and «يشاهد هذا المنتج» in `twilight.json`
+together with `src/locales/ar.json` — the same files Salla quoted.
+
+
 ## 1.8.0
 
 ### Salla's publishing acceptance checklist, implemented

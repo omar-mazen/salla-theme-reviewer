@@ -1190,10 +1190,18 @@ console.log("\n3.17) قائمة اعتماد نشر الثيم:");
 {
     const { theme, cleanup } = makeTheme({
         "twilight.json": '{"name":"cl"}',
+        // Twilight addresses templates in dot notation — the dominant form in
+        // real themes (about 860 uses to 1 slash path across 20 shipped themes).
         "src/views/layouts/master.twig": `<salla-scopes></salla-scopes>
+{% extends "layouts.master" %}
+{% include 'components.header.header' %}
+{% include 'components.header.header.twig' %}
 {% include 'components/header/header.twig' %}
+{% include 'pages.partials.product.options' %}
 {% include 'components/does-not-exist.twig' %}
-{% extends 'layouts/missing-base.twig' %}`,
+{% extends 'layouts.missing-base' %}
+{% include 'pages.' ~ page_name %}`,
+        "src/views/pages/partials/product/options.twig": "<salla-product-options></salla-product-options><salla-multiple-bundle-product></salla-multiple-bundle-product>",
         "src/views/components/header/header.twig": "<header><salla-cart-summary></salla-cart-summary><salla-user-menu></salla-user-menu></header>",
         "src/views/components/product/card.twig": "<div>{% if x %}{% endif %}</div>\n<script>salla.product.getDetails(product.id).then(render);</script>",
         "src/views/pages/index.twig": `<salla-products-slider source="selected" source-value="[{{ products|map(p => p.id)|join(',') }}]"></salla-products-slider>
@@ -1208,10 +1216,14 @@ console.log("\n3.17) قائمة اعتماد نشر الثيم:");
 
     // §7 — every include/embed/extends must resolve
     const missing = ofType("Missing Template");
+    assert(!missing.some((i) => /layouts\.master|components\.header\.header/.test(i.desc || "")),
+        "صيغة النقاط (layouts.master) تُحلّ بشكل صحيح ولا تُبلَّغ");
     assert(missing.length === 2, `المراجع المكسورة فقط تُبلَّغ (${missing.length}) — البند 7`);
-    assert(descHas("Missing Template", "components/does-not-exist.twig") && descHas("Missing Template", "layouts/missing-base.twig"),
-        "include و extends المكسوران يُرصدان");
-    assert(!descHas("Missing Template", "header/header.twig"), "المرجع الصحيح لا يُبلَّغ");
+    assert(descHas("Missing Template", "components/does-not-exist.twig") && descHas("Missing Template", "layouts.missing-base"),
+        "include و extends المكسوران يُرصدان (بأي من الصيغتين)");
+    assert(!descHas("Missing Template", "header/header.twig") && !descHas("Missing Template", "pages.partials.product.options"),
+        "المراجع الصحيحة بصيغتَي النقاط والشرطة لا تُبلَّغ");
+    assert(!missing.some((i) => (i.desc || "").includes("~")), "المسار المُركَّب وقت العرض (~) لا يُبلَّغ");
     assert(missing.every((i) => core.issueSeverity(i) === "error"), "المرجع المكسور = خطأ (صفحة فارغة)");
 
     // §9 — no getDetails() while a list renders
