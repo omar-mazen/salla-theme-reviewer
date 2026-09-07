@@ -1,5 +1,167 @@
 # Changelog
 
+## 1.8.0
+
+### Salla's publishing acceptance checklist, implemented
+
+The official checklist names requirements the extension did not cover. Each item
+below cites its section.
+
+- **Broken template references (§7).** Every static `{% include %}`, `{% embed %}`,
+  `{% extends %}`, `{% import %}` and `include()` must point at a Twig file that
+  exists — a typo renders an empty page. Paths resolve the way Twig does: from
+  `src/views`, then relative to the including file. Reported as an error.
+- **Product card performance (§9).** `salla.product.getDetails()` inside a card or
+  product-list template fires one request per card while the list renders. Salla
+  permits the call only after a customer interaction — a Quick View, or a popup
+  opened by a click.
+- **Product lists and sliders (§8).** The check now covers `salla-products-list`
+  as well as `salla-products-slider`, and reports `source-value` passed without
+  `json_encode` and a component wired to a section with no `limit`, alongside the
+  existing map/join finding.
+- **Required components (§3), rebuilt from the checklist.** `master.twig` now
+  requires `salla-offer-modal`, `salla-login-modal`, `salla-search` and
+  `salla-add-product-toast`; the header keeps `salla-cart-summary` and
+  `salla-user-menu`; cart, orders, thank-you and product-options gained the
+  components the checklist lists. Pages the checklist marks *as applicable*
+  (product page, category filters, orders index, account, loyalty) are checked
+  only when the theme actually has them, and report as warnings — a theme with no
+  wallet page is never told to add `salla-wallet`.
+- **`document.cookie` is now an error (§5)** — the checklist forbids it outright
+  rather than asking for review.
+- **Public vs private submissions (§1, §6).** New `sallaReview.themeVisibility`:
+  a private theme gets the 2 MB packed limit instead of 1 MB, and hardcoded UI
+  text drops to a warning (Salla may exempt private themes, though translation
+  support stays best practice).
+
+CLI flags `--no-template-refs` and `--no-product-card` disable the two new
+checks; both are on by default and need no network.
+
+## 1.7.0
+
+### Three more rejection reasons the checks used to miss
+
+From four fresh rejection emails.
+
+- **Rejected wording is now looked for outside code.** «يشاهد هذا المنتج» was
+  quoted from `twilight.json` (a setting label) and from `ar.json` (a locale
+  file) in three separate rejections, while the check only ever read Twig and
+  JS — so it saw none of them. JSON files are now scanned: `twilight.json`,
+  locale files and any other theme JSON. Generated lockfiles
+  (`package-lock.json`, `*-lock.json`) stay out, and the custom-rules file is
+  exempt so a rule that *forbids* a phrase is not reported for containing it.
+  Unresolved merge-conflict markers inside JSON are caught for the same reason —
+  those files were previously never opened at all.
+- **The identifier behind the feature is reported too.** A phrase can be
+  translated away while the setting driving a live-viewer counter stays, so keys
+  such as `live_viewers_enabled`, `viewers_count` and `watching_now` are flagged
+  as a warning. Deliberately narrow: `viewed_products`, `reviewers` and
+  `review_count` are legitimate and are left alone.
+- **`salla-search` belongs in `layouts/master.twig`, not `header.twig`.**
+  Webview mode hides the header and the footer, so a component that lives only
+  there is unreachable — "وجودها في الهيدر/الفوتر وحده غير كافٍ". The finding
+  now names master.twig, explains why, and links the reference implementation in
+  theme-raed. `salla-cart-summary-card` carries its PR reference (962) as well.
+- The fake-engagement phrase list gained the other wordings the emails quote
+  (`يشاهدون الآن`, `شخصًا يشاهد`, `people are watching`, …).
+
+## 1.6.0
+
+### "Send to Agent" buttons, and delivery to the assistant you actually use
+
+**A Salla Review panel, next to Problems.** VS Code offers extensions no way to
+add buttons to its built-in Problems panel — there is no menu contribution point
+for it, which is why editors that ship those buttons (Antigravity) do it by
+forking the workbench itself. So the findings are mirrored into a view of our
+own, in the panel area beside Problems, where every row carries an action:
+
+- ✨ on a single finding → sends that finding.
+- ✨ on a file row → sends every finding in that file.
+- ✨ in the view's title bar → **Send all to Agent**, the whole theme.
+
+Rows are read straight back out of the diagnostics, so the view can never
+disagree with the Problems panel, and clicking one jumps to the line.
+
+**A button in the editor too.** Every line with a finding now shows a
+`🤖 أرسل إلى الوكيل` CodeLens above it (`sallaReview.agentCodeLens`, on by
+default), so a finding can be handed over without leaving the code. The 💡 Quick
+Fix entries and the Command Palette commands from 1.5.0 still work, and the
+right-click menu gained *Send This File's Findings to AI Agent*.
+
+**A one-click button in the status bar.** Next to the finding counts:
+`✨ أرسل N إلى الوكيل` sends the whole theme, from anywhere in the editor,
+without opening a panel first.
+
+**It goes to the chat that is actually open — nothing is asked.** The installed
+extensions are inspected (each declares its commands in its own `package.json`),
+and the destination follows what is on screen: the focused chat first, then any
+open chat, then a merely installed assistant. "Is the extension active" is
+deliberately *not* used as the signal — Claude Code activates on
+`onStartupFinished`, so it counts as active from the moment the window opens
+whether or not its chat was ever shown, which would send everything to Claude
+even with Copilot's chat in front of you. Known assistants are addressed through
+their real command ids, and anything else is matched generically, so an agent
+nobody hard-coded still works. The button in the status bar names its
+destination (`✨ أرسل 3 إلى Claude Code`) so it is never a surprise, and
+*Salla Review: Select AI Agent* pins one — or restores **تلقائي**, which follows
+the open chat again. `sallaReview.agentCommand` still overrides everything.
+
+**The files are referenced in the conversation, for one finding or for all.**
+Claude Code's own @-mention (alt+K) reads the focused editor's selection and
+drops `@path#Lline` into its chat input. Sending now does exactly that for every
+file that has findings — each is briefly opened with its first finding selected,
+the mention is inserted, and the editor you were on is restored — so
+**Send all to Agent** puts the whole review in the conversation instead of
+leaving a clipboard note. One mention per file (capped at 25), and the full
+finding text still goes to the clipboard for the paste.
+
+Assistants differ in what they accept, and that difference is handled honestly:
+
+- **Copilot Chat** takes the task as a command argument, so it is sent and the
+  chat opens with it already there.
+- **Claude Code** contributes no command that accepts a prompt — the most it
+  offers is opening and focusing its input — so its input is focused, the task
+  is on the clipboard, and the status bar says to press `Ctrl+V`. There is no
+  public API to type into another extension's chat; an editor that does this
+  seamlessly (Antigravity) ships its own agent.
+
+The task is placed on the clipboard every time regardless, so a terminal agent
+such as the Claude Code CLI is always one paste away. `test/agent-detect.js`
+covers the ranking against real extension manifests.
+
+## 1.5.0
+
+### Send findings to an AI agent
+
+Any finding can now be handed to a coding assistant as a ready task, instead of
+retyping what it says and where it is:
+
+- **On the finding** — the 💡 lightbulb on the line, and the same entry on the
+  row in the Problems panel: *"🤖 أرسل هذه الملاحظة إلى الوكيل لإصلاحها"*. When a
+  file has several findings, one more action sends them all together.
+- **Commands** — *Salla Review: Send This File's Findings to AI Agent* and
+  *Send All Findings to AI Agent* (the latter covers every finding in the theme,
+  including the network-based Twilight Version ones).
+
+The task is written as markdown: what the theme is, then each finding with its
+type, severity, path and line, the message exactly as the editor shows it, the
+concrete fix for that check, and the surrounding code fenced in the file's own
+language. It also states the ground rules — change only what a finding requires,
+keep the rendered output and wording identical — so an agent does not
+"fix" a hardcoded string by rewording the page. Paths are relative to the theme,
+so nothing machine-specific leaks into the prompt. Every finding type the engine
+can emit has fix guidance, enforced by a test.
+
+VS Code has no single "hand this to the agent" API — each assistant registers
+its own command — so the target is resolved against the commands actually
+present in the window: `sallaReview.agentCommand` if set, otherwise the built-in
+chat view (`workbench.action.chat.open`). If neither is available the task is
+copied to the clipboard, with a button to open it as a markdown file, which
+works with every assistant including terminal ones such as Claude Code.
+
+The prompt is assembled inside the review worker, where the findings and the
+file lines already live, so building it costs the editor nothing.
+
 ## 1.4.0
 
 ### Fixed: stale findings after an edit made outside the editor

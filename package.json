@@ -2,7 +2,7 @@
   "name": "salla-theme-reviewer",
   "displayName": "Salla Theme Reviewer",
   "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
-  "version": "1.4.0",
+  "version": "1.8.0",
   "publisher": "omarmazen",
   "license": "MIT",
   "engines": {
@@ -19,7 +19,7 @@
   "scripts": {
     "build-manifest": "node scripts/build-raed-manifest.js",
     "review": "node cli.js",
-    "test": "node test/run.js",
+    "test": "node test/run.js && node test/agent-detect.js",
     "update-raed": "node scripts/update-raed-from-github.js",
     "make-icon": "node scripts/make-icon.js"
   },
@@ -55,11 +55,100 @@
         "title": "Update Raed Reference"
       },
       {
+        "command": "sallaReview.sendAllToAgent",
+        "category": "Salla Review",
+        "title": "Send All Findings to AI Agent",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "sallaReview.sendFileToAgent",
+        "category": "Salla Review",
+        "title": "Send This File's Findings to AI Agent"
+      },
+      {
+        "command": "sallaReview.sendFindingToAgent",
+        "category": "Salla Review",
+        "title": "Send Finding to AI Agent"
+      },
+      {
+        "command": "sallaReview.sendNodeToAgent",
+        "category": "Salla Review",
+        "title": "Send to Agent",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "sallaReview.selectAgent",
+        "category": "Salla Review",
+        "title": "Select AI Agent"
+      },
+      {
         "command": "sallaReview.clear",
         "category": "Salla Review",
         "title": "Clear Problems"
       }
     ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "sallaReviewPanel",
+          "title": "Salla Review",
+          "icon": "icon.png"
+        }
+      ]
+    },
+    "views": {
+      "sallaReviewPanel": [
+        {
+          "id": "sallaReview.findings",
+          "name": "Findings",
+          "icon": "icon.png"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "sallaReview.findings",
+        "contents": "No findings yet.\n[Review Themes](command:sallaReview.scan)\nEvery finding here can be handed to your AI assistant with the ✨ button — on a single finding, on a whole file, or all at once from the title bar."
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sallaReview.sendAllToAgent",
+          "when": "view == sallaReview.findings",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sallaReview.scan",
+          "when": "view == sallaReview.findings",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sallaReview.report",
+          "when": "view == sallaReview.findings",
+          "group": "1_more@1"
+        },
+        {
+          "command": "sallaReview.selectAgent",
+          "when": "view == sallaReview.findings",
+          "group": "1_more@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sallaReview.sendNodeToAgent",
+          "when": "view == sallaReview.findings",
+          "group": "inline"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "sallaReview.sendFileToAgent",
+          "when": "resourceExtname =~ /\\.(twig|js|css|scss|json)$/",
+          "group": "1_modification@100"
+        }
+      ]
+    },
     "configuration": [
       {
         "title": "General",
@@ -77,11 +166,37 @@
             "scope": "resource",
             "description": "Re-analyze while you type (runs after ~1s of typing pause) — findings appear and clear live against the unsaved editor buffer, no save needed. The analysis runs on the review worker thread, so typing stays responsive; off by default because the default on-save check (sallaReview.runOnSave) is enough for most workflows."
           },
+          "sallaReview.themeVisibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "private"
+            ],
+            "enumDescriptions": [
+              "Public theme or elements set: 1 MB packed limit, and hardcoded UI text is a rejection reason.",
+              "Private theme or elements set: 2 MB packed limit, and hardcoded UI text is reported as a warning (Salla may exempt private themes, but translation support is still best practice)."
+            ],
+            "default": "public",
+            "scope": "resource",
+            "description": "Which publishing track this theme targets. Salla's acceptance checklist applies a different size limit and a different translation requirement to private submissions."
+          },
           "sallaReview.scanOnStartup": {
             "type": "boolean",
             "default": true,
             "scope": "resource",
             "description": "Run a full review of every theme in the workspace automatically, shortly after the window opens."
+          },
+          "sallaReview.agentCommand": {
+            "type": "string",
+            "default": "",
+            "scope": "window",
+            "markdownDescription": "Command id used by **Send … to AI Agent** to hand the findings over. Leave empty to auto-detect: the VS Code chat view (`workbench.action.chat.open`) is used when available, otherwise the task is copied to the clipboard so it can be pasted into any assistant, including terminal ones such as Claude Code. Set this to your assistant's own \"open chat with prompt\" command id if it registers one — it is called with `{ query: \"<the task>\" }`. Run **Developer: Show All Commands** to find the id."
+          },
+          "sallaReview.agentCodeLens": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Show a \"🤖 Send to agent\" button above every line that has a finding, right in the editor. Turn this off if you prefer the Salla Review panel and the 💡 Quick Fix menu only."
           },
           "sallaReview.ignoredTexts": {
             "type": "array",
@@ -147,7 +262,7 @@
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "description": "Report fake social-proof and urgency signals: Math.random() near viewer/buyer wording, and phrases Salla has explicitly rejected (live-viewer counters). Salla provides no real-time viewer or purchase data, so such claims mislead shoppers."
+            "description": "Report fake social-proof and urgency signals: Math.random() near viewer/buyer wording, phrases Salla has explicitly rejected (\"يشاهد هذا المنتج\", \"people are watching\", ...), and the setting/translation keys that drive such a counter (live_viewers, viewers_count, watching_now). Salla provides no real-time viewer or purchase data, so such claims mislead shoppers. The phrases are searched in every scanned file — twilight.json and the locale JSON files included, which is where real rejections quoted them."
           },
           "sallaReview.checks.sliderSource": {
             "type": "boolean",
@@ -184,6 +299,18 @@
             "default": true,
             "scope": "resource",
             "description": "Verify that the committed lockfile (pnpm-lock.yaml, package-lock.json, or yarn.lock) still matches the dependency versions declared in package.json. Bumping a package — the @salla.sa/twilight ones in particular — without re-running the install leaves the lockfile behind, and every CI install then fails with ERR_PNPM_OUTDATED_LOCKFILE, because --frozen-lockfile is on by default in CI. Each mismatched package is reported on its package.json line. No network needed."
+          },
+          "sallaReview.checks.templateRefs": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Verify that every static {% include %}, {% embed %}, {% extends %}, {% import %} and include() points at a Twig file that exists (paths resolve from src/views, then relative to the including file). A typo renders an empty page — item 7 of Salla's publishing acceptance checklist."
+          },
+          "sallaReview.checks.productCardFetch": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "description": "Report salla.product.getDetails() called inside a product card / product list template, which fires one request per card while lists render. Salla's publishing checklist (item 9) allows the call only after a customer interaction — Quick View, or a popup opened by a click."
           },
           "sallaReview.checks.twilightVersion": {
             "type": "boolean",

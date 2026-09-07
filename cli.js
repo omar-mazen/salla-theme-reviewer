@@ -91,6 +91,8 @@ const SETTINGS_TO_OPTS = {
     "sallaReview.checks.bundle": "bundleCheck",
     "sallaReview.checks.structure": "structureCheck",
     "sallaReview.checks.lockfile": "lockfileCheck",
+    "sallaReview.checks.templateRefs": "templateRefCheck",
+    "sallaReview.checks.productCardFetch": "productCardFetch",
     "sallaReview.checks.twilightManifest": "twilightManifestCheck",
     "sallaReview.checks.cssVariables": "cssVarCheck",
     "sallaReview.checks.colors": "colorCheck",
@@ -132,6 +134,8 @@ const flagOpts = {
     bundleCheck: !flags.has("--no-bundle"),
     structureCheck: !flags.has("--no-structure"),
     lockfileCheck: !flags.has("--no-lockfile"),
+    templateRefCheck: !flags.has("--no-template-refs"),
+    productCardFetch: !flags.has("--no-product-card"),
     twilightManifestCheck: !flags.has("--no-manifest"),
     cssVarCheck: !flags.has("--no-cssvars"),
     colorCheck: !flags.has("--no-colors"),
@@ -190,6 +194,8 @@ const GH_CHECK_ROWS = [
     ["Security & policy", ["Security", "Custom Code", "Misleading UX (Social Proof/Urgency)"]],
     ["Merge conflicts", ["Merge Conflict"]],
     ["Twilight packages", ["Twilight Version", "Lockfile"]],
+    ["Templates", ["Missing Template"]],
+    ["Performance", ["Product Card Performance"]],
     ["Custom rules", ["Custom Rule"]],
     ["Style quality", ["Hardcoded Color", "CSS Variables", "Theme Size", "Vite Config", "Bundle i18n", "Bundle Quality"]],
 ];
@@ -204,6 +210,8 @@ const GH_FIX_HINTS = {
     "Merge conflicts": "Resolve the conflict markers at the annotated lines and commit the resolved files.",
     "Twilight packages": "Run your package manager install (pnpm install / npm install) so the lockfile matches package.json, then npm run prod, and push the lockfile together with the built assets.",
     "Style quality": "Use theme settings / CSS variables for the annotated values.",
+    "Templates": "Fix the include/embed/extends path, or add the missing .twig file (paths resolve from src/views).",
+    "Performance": "Move salla.product.getDetails() out of the product card; fetch only after a Quick View or a click.",
     "Custom rules": "These are your team's own rules from salla-rules.json — fix the annotated lines or adjust the rule.",
 };
 

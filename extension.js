@@ -9,9 +9,11 @@ const raedUpdater = require("./lib/raed-updater.js");
 
 let globalStoragePath = null; // versions cache + the updated Raed manifest
 let extensionPath = null; // extension install dir — source for vendored CI files
+let extensionContext = null; // globalState: the AI agent the user picked
 let diagnostics; // vscode.DiagnosticCollection
 let output; // vscode.OutputChannel
-let statusItem; // vscode.StatusBarItem
+let statusItem; // vscode.StatusBarItem — finding counts
+let agentItem; // vscode.StatusBarItem — always-visible "Send all to Agent" button
 
 /**
  * Per theme root. Nothing heavy lives on this thread: the engine state (facts,
@@ -105,6 +107,9 @@ function readConfig(scopeUri) {
         bundle: check("bundle"),
         structure: check("structure"),
         lockfile: check("lockfile"),
+        templateRefs: check("templateRefs"),
+        productCardFetch: check("productCardFetch"),
+        themeVisibility: cfg.get("themeVisibility", "public"),
         twilightManifest: check("twilightManifest", "twilightManifestCheck"),
         cssVariables: check("cssVariables", "cssVarCheck", false),
         colors: check("colors", "colorCheck", false),
@@ -140,6 +145,9 @@ function engineOpts(cfg) {
         bundleCheck: cfg.bundle,
         structureCheck: cfg.structure,
         lockfileCheck: cfg.lockfile,
+        templateRefCheck: cfg.templateRefs,
+        productCardFetch: cfg.productCardFetch,
+        themeVisibility: cfg.themeVisibility,
         twilightManifestCheck: cfg.twilightManifest,
         cssVarCheck: cfg.cssVariables,
         colorCheck: cfg.colors,
@@ -298,7 +306,10 @@ function applyReply(root, reply) {
         batch.push([vscode.Uri.file(file), keepVersion ? entry.versionDiags : undefined]);
         entry.shownFiles.delete(file);
     }
-    if (batch.length) diagnostics.set(batch);
+    if (batch.length) {
+        diagnostics.set(batch);
+        refreshFindingsView();
+    }
     entry.counts = reply.counts;
     return { files: batch.length, ms: Date.now() - t0 };
 }
@@ -307,13 +318,17 @@ function clearEntryDiagnostics(entry) {
     const batch = [...entry.shownFiles].map((f) => [vscode.Uri.file(f), undefined]);
     const pkg = pkgPathOf(entry);
     if (pkg && entry.versionDiags.length) batch.push([vscode.Uri.file(pkg), undefined]);
-    if (batch.length) diagnostics.set(batch);
+    if (batch.length) {
+        diagnostics.set(batch);
+        refreshFindingsView();
+    }
     entry.shownFiles.clear();
 }
 
 /** After the engine restarted: what is on screen no longer matches any state */
 function resetShown() {
     diagnostics.clear();
+    refreshFindingsView();
     for (const entry of roots.values()) {
         entry.shownFiles.clear();
         entry.counts = null;
@@ -351,6 +366,16 @@ function updateStatusBar() {
         ? `Salla Review: ${errors} خطأ، ${warnings} تحذير، ${infos} معلومة (${total} في لوحة Problems)`
         : "Salla Review: لا توجد مشاكل";
     statusItem.show();
+
+    // The one-click "hand everything to the agent" button — visible whenever
+    // there is something to hand over, wherever the user is in the editor.
+    if (total > 0) {
+        agentItem.text = `$(sparkle) أرسل ${total} إلى ${currentAgentLabel || "الوكيل"}`;
+        agentItem.tooltip = `Salla Review: إرسال كل الملاحظات (${total}) إلى ${currentAgentLabel || "وكيل الذكاء الاصطناعي"}\nلتغيير الوجهة: Salla Review: Select AI Agent`;
+        agentItem.show();
+    } else {
+        agentItem.hide();
+    }
 }
 
 function entryTotal(entry) {
@@ -369,8 +394,9 @@ const TWIG_NAMING_MSG_RE = /"([A-Za-z_][A-Za-z0-9_]*)".*?التصحيح:\s*"([a-
 const quickFixProvider = {
     provideCodeActions(document, _range, context) {
         const actions = [];
-        for (const d of context.diagnostics) {
-            if (d.source !== "Salla Review" || d.code !== "Twig Naming") continue;
+        const ours = context.diagnostics.filter((d) => d.source === "Salla Review");
+        for (const d of ours) {
+            if (d.code !== "Twig Naming") continue;
             const m = TWIG_NAMING_MSG_RE.exec(d.message);
             if (!m) continue;
             const [, from, to] = m;
@@ -381,6 +407,34 @@ const quickFixProvider = {
             action.diagnostics = [d];
             action.isPreferred = true;
             action._rename = { document, from, to };
+            actions.push(action);
+        }
+        // "Send to agent" on every finding — shown on the editor lightbulb and on
+        // the row in the Problems panel, so a finding can be handed over without
+        // retyping what it says or where it is.
+        for (const d of ours) {
+            const action = new vscode.CodeAction(
+                `🤖 أرسل هذه الملاحظة (${d.code}) إلى الوكيل لإصلاحها`,
+                vscode.CodeActionKind.QuickFix
+            );
+            action.diagnostics = [d];
+            action.command = {
+                command: "sallaReview.sendFindingToAgent",
+                title: "Send to agent",
+                arguments: [document.uri.fsPath, d.range.start.line + 1, d.code, d.message],
+            };
+            actions.push(action);
+        }
+        if (ours.length > 1) {
+            const action = new vscode.CodeAction(
+                `🤖 أرسل كل ملاحظات هذا الملف (${ours.length}) إلى الوكيل`,
+                vscode.CodeActionKind.QuickFix
+            );
+            action.command = {
+                command: "sallaReview.sendFileToAgent",
+                title: "Send file findings to agent",
+                arguments: [document.uri.fsPath],
+            };
             actions.push(action);
         }
         return actions;
@@ -401,6 +455,477 @@ const quickFixProvider = {
         }
         action.edit = edit;
         return action;
+    },
+};
+
+/* =============== Send findings to an AI agent =============== */
+
+/**
+ * VS Code has no single "hand this to the agent" API: every assistant registers
+ * its own commands. Rather than guessing command ids, the installed extensions
+ * are inspected — an extension declares its commands in its own package.json —
+ * and the ones that look like "open a chat / start a task" are offered. That
+ * way an assistant this extension has never heard of still shows up.
+ */
+/**
+ * Assistants whose command ids are known, with what they actually accept.
+ * `acceptsPrompt` is the important part: Copilot's chat command takes the text
+ * as an argument and sends it, while Claude Code exposes no command that accepts
+ * a prompt at all — the best it can do is open and focus its input, so the task
+ * goes to the clipboard and one paste finishes it. Candidate commands are tried
+ * in order and only used when actually registered in this window.
+ */
+const KNOWN_AGENTS = [
+    {
+        id: /^anthropic\.claude-code$/i,
+        label: "Claude Code",
+        acceptsPrompt: false,
+        commands: ["claude-vscode.focus", "claude-vscode.sidebar.open", "claude-vscode.editor.openLast", "claude-vscode.editor.open", "claude-vscode.newConversation"],
+        // Claude Code's own @-mention (alt+K): it reads the focused editor's
+        // selection and drops "@path#Lline" into the chat input. Running it once
+        // per affected file is how a whole review lands in the conversation.
+        // The second id is what terminal mode (claudeCode.useTerminal) binds.
+        mentionCommands: ["claude-vscode.insertAtMention", "claude-code.insertAtMentioned"],
+        window: /claude/i,
+    },
+    { id: /^github\.copilot-chat$/i, label: "GitHub Copilot Chat", acceptsPrompt: true, commands: ["workbench.action.chat.open"], window: /copilot|^chat$|chat view/i },
+    { id: /^continue\.continue$/i, label: "Continue", acceptsPrompt: false, commands: ["continue.focusContinueInput", "continue.continueGUIView.focus"], window: /continue/i },
+    { id: /claude-dev|cline/i, label: "Cline", acceptsPrompt: false, commands: ["cline.plusButtonClicked", "claude-dev.plusButtonClicked", "cline.focusChatInput"], window: /cline/i },
+    { id: /roo-?cline|roo-?code/i, label: "Roo Code", acceptsPrompt: false, commands: ["roo-cline.plusButtonClicked", "roo-cline.focus"], window: /roo/i },
+    { id: /^sourcegraph\.cody-ai$/i, label: "Cody", acceptsPrompt: false, commands: ["cody.chat.newEditorPanel", "cody.chat.focus"], window: /cody/i },
+];
+
+/**
+ * Which assistants are actually on screen.
+ *
+ * `extension.isActive` looks like the obvious signal and is not: Claude Code
+ * activates on `onStartupFinished`, so it counts as active from the moment the
+ * window opens whether or not its chat was ever shown — which is why everything
+ * used to go to Claude. The tabs are real evidence: a chat opened in the editor
+ * area is a webview tab whose view type and label name its owner, and the
+ * focused tab is stronger evidence still.
+ */
+function openAgentSurfaces() {
+    const active = [];
+    const open = [];
+    let groups = [];
+    try { groups = vscode.window.tabGroups.all; } catch { return { active, open }; }
+    for (const group of groups) {
+        for (const tab of group.tabs || []) {
+            const input = tab.input || {};
+            const viewType = input.viewType || input.notebookType || "";
+            const text = `${viewType} ${tab.label || ""}`.trim();
+            if (!text) continue;
+            (tab.isActive && group.isActive ? active : open).push(text);
+        }
+    }
+    return { active, open };
+}
+
+/** How strongly this assistant appears to be the one on screen */
+function visibilityScore(re, surfaces) {
+    if (!re) return 0;
+    if (surfaces.active.some((t) => re.test(t))) return 300; // the focused chat
+    if (surfaces.open.some((t) => re.test(t))) return 150;   // open, not focused
+    return 0;
+}
+
+/**
+ * Anything else that looks like an assistant, by vendor name or by generic
+ * wording, so an agent nobody hard-coded still shows up. Kept deliberately wide:
+ * a match only makes an extension a *candidate* — it still has to contribute a
+ * command that looks like "open a chat", and a running agent outranks it anyway.
+ */
+const AI_EXTENSION_RE = /claude|copilot|cline|continue|cody|roo-|roocode|gemini|codeium|windsurf|tabnine|aider|amazonq|kilo|augment|cursor|antigravity|chatgpt|openai|codewhisperer|sourcegraph|\bai\b|\bagent\b|\bassistant\b|\bllm\b|gpt/i;
+const AGENT_COMMAND_RE = /chat|ask|prompt|agent|task|conversation|compose|session|focus|open/i;
+const AGENT_NOISE_RE = /logout|login|update|walkthrough|log|debug|feedback|accept|reject|rename|worktree|install|blur|unread|preference|repositor|pull ?request|diff/i;
+
+function scoreAgentCommand(id, title) {
+    let score = 0;
+    if (/newconversation|newchat|new-chat|newtask|focuschat|chatinput|plusbutton/i.test(id)) score += 12;
+    if (/\bfocus\b/i.test(id)) score += 8;
+    if (/chat|conversation|agent|task/i.test(id) || /chat|conversation/i.test(title)) score += 5;
+    if (/open|new|start|show/i.test(id)) score += 3;
+    if (/sidebar|panel|view/i.test(id)) score += 2;
+    if (AGENT_NOISE_RE.test(id) || AGENT_NOISE_RE.test(title)) score -= 20;
+    return score;
+}
+
+/**
+ * Every assistant this window can deliver to, best first. An assistant that is
+ * *running* — its chat is open, so VS Code has activated it — outranks one that
+ * is merely installed, which is how "the agent that is open" gets chosen without
+ * asking anything.
+ */
+async function detectAgents() {
+    const registered = new Set(await vscode.commands.getCommands(true));
+    const surfaces = openAgentSurfaces();
+    const found = [];
+
+    for (const ext of vscode.extensions.all) {
+        if (ext.id.startsWith("vscode.")) continue;
+        const pkg = ext.packageJSON || {};
+        const name = pkg.displayName || ext.id;
+        const known = KNOWN_AGENTS.find((k) => k.id.test(ext.id));
+
+        if (known) {
+            const command = known.commands.find((c) => registered.has(c));
+            if (command) {
+                const visible = visibilityScore(known.window, surfaces);
+                found.push({
+                    command, label: known.label, detail: command,
+                    acceptsPrompt: known.acceptsPrompt,
+                    mentionCommand: (known.mentionCommands || []).find((c) => registered.has(c)) || null,
+                    visible: visible > 0, focused: visible >= 300,
+                    score: 100 + visible,
+                });
+                continue;
+            }
+        }
+        if (!AI_EXTENSION_RE.test(ext.id) && !AI_EXTENSION_RE.test(name)) continue;
+        // Unknown assistant: rank its own commands and take the most chat-like one
+        let best = null;
+        for (const c of (pkg.contributes && pkg.contributes.commands) || []) {
+            if (!c || !registered.has(c.command)) continue;
+            const title = typeof c.title === "string" ? c.title : (c.title && c.title.value) || "";
+            if (!AGENT_COMMAND_RE.test(c.command) && !AGENT_COMMAND_RE.test(title)) continue;
+            const score = scoreAgentCommand(c.command, title);
+            if (score > 0 && (!best || score > best.score)) {
+                best = { command: c.command, label: name, detail: c.command, score, acceptsPrompt: false };
+            }
+        }
+        if (best) {
+            // Match the extension's own name against what is on screen
+            const re = new RegExp(String(name).split(/\s+/)[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+            const visible = visibilityScore(re, surfaces);
+            found.push({ ...best, visible: visible > 0, focused: visible >= 300, score: best.score + 20 + visible });
+        }
+    }
+
+    if (registered.has("workbench.action.chat.open") && !found.some((f) => f.command === "workbench.action.chat.open")) {
+        const visible = visibilityScore(/copilot|^chat$|chat view/i, surfaces);
+        found.push({
+            command: "workbench.action.chat.open", label: "VS Code Chat", detail: "workbench.action.chat.open",
+            acceptsPrompt: true, visible: visible > 0, focused: visible >= 300, score: 10 + visible,
+        });
+    }
+    found.sort((a, b) => b.score - a.score || a.command.localeCompare(b.command));
+    return found;
+}
+
+const AGENT_STATE_KEY = "sallaReview.agentCommand";
+
+/**
+ * Where a "Send to Agent" button delivers. Nothing is ever asked: an explicit
+ * sallaReview.agentCommand wins, then a target the user chose before, then the
+ * running assistant. `force` (the "Select AI Agent" command) shows the picker.
+ * @returns {Promise<{command,label,acceptsPrompt}|null|undefined>} null = clipboard, undefined = cancelled
+ */
+async function resolveAgentTarget(force) {
+    const registered = new Set(await vscode.commands.getCommands(true));
+    const agents = await detectAgents();
+
+    if (!force) {
+        const configured = vscode.workspace.getConfiguration("sallaReview").get("agentCommand", "");
+        if (configured) {
+            if (registered.has(configured)) {
+                return agents.find((a) => a.command === configured) || { command: configured, label: configured, acceptsPrompt: true };
+            }
+            output.appendLine(`⚠️ sallaReview.agentCommand "${configured}" غير مسجَّل في هذه النافذة`);
+        }
+        // A pinned choice (from "Select AI Agent") wins; otherwise follow the screen
+        const pinned = extensionContext.globalState.get(AGENT_STATE_KEY);
+        if (pinned && registered.has(pinned)) {
+            const known = agents.find((a) => a.command === pinned);
+            return known ? { ...known, pinned: true } : { command: pinned, label: pinned, acceptsPrompt: false, pinned: true };
+        }
+        return agents[0] || null;
+    }
+
+    if (!agents.length) {
+        vscode.window.showInformationMessage("Salla Review: لم يُعثر على أي إضافة ذكاء اصطناعي في هذه النافذة — ستُنسخ المهام إلى الحافظة.");
+        return null;
+    }
+    const AUTO = { label: "$(wand) تلقائي — اتبع المحادثة المفتوحة", detail: agents[0] ? `الآن: ${agents[0].label}` : "", command: "__auto__" };
+    const CLIPBOARD = { label: "$(clippy) الحافظة فقط", detail: "لوكيل يعمل في الطرفية (Claude Code CLI مثلاً)", command: "" };
+    const pick = await vscode.window.showQuickPick(
+        [
+            AUTO,
+            ...agents.map((a) => ({
+                label: `${a.focused ? "$(circle-filled) " : a.visible ? "$(circle-outline) " : ""}${a.label}`,
+                description: a.focused ? "المحادثة المفتوحة الآن" : a.visible ? "مفتوحة" : "مثبَّتة فقط",
+                detail: a.detail,
+                command: a.command,
+            })),
+            CLIPBOARD,
+        ],
+        { placeHolder: "إلى أي وكيل تُرسل ملاحظات Salla Review؟" }
+    );
+    if (!pick) return undefined;
+    if (pick.command === "__auto__") {
+        await extensionContext.globalState.update(AGENT_STATE_KEY, undefined);
+        return agents[0];
+    }
+    await extensionContext.globalState.update(AGENT_STATE_KEY, pick.command);
+    return pick.command ? agents.find((a) => a.command === pick.command) : null;
+}
+
+/** Above this many files, mentioning each one costs more than it is worth */
+const MAX_MENTIONS = 25;
+
+/**
+ * Reference the findings' files inside the agent's chat, the way the user would
+ * by selecting a line and pressing alt+K. The mention command reads the focused
+ * editor's selection, so each file is briefly opened and its finding line
+ * selected; the editor that was in front beforehand is restored afterwards.
+ * @returns {Promise<number>} how many files were mentioned
+ */
+async function mentionLocations(target, locations) {
+    if (!target || !target.mentionCommand || !locations || !locations.length) return 0;
+    const previous = vscode.window.activeTextEditor;
+    const previousSelection = previous && previous.selection;
+    let mentioned = 0;
+
+    for (const loc of locations.slice(0, MAX_MENTIONS)) {
+        try {
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(loc.file));
+            const line = Math.min(Math.max(0, (loc.line || 1) - 1), Math.max(0, doc.lineCount - 1));
+            const editor = await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+            editor.selection = new vscode.Selection(line, 0, line, doc.lineAt(line).text.length);
+            editor.revealRange(editor.selection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+            await vscode.commands.executeCommand(target.mentionCommand);
+            mentioned++;
+        } catch (e) {
+            output.appendLine(`⚠️ تعذّرت إضافة مرجع للملف ${loc.file}: ${e.message}`);
+        }
+    }
+
+    if (previous) {
+        try {
+            const editor = await vscode.window.showTextDocument(previous.document, { preview: false, preserveFocus: false });
+            if (previousSelection) editor.selection = previousSelection;
+        } catch { /* the original editor is gone — leave things where they are */ }
+    }
+    return mentioned;
+}
+
+/** The target shown on the status bar button — refreshed when the tabs change */
+let currentAgentLabel = "";
+
+async function refreshAgentLabel() {
+    let label = "";
+    try {
+        const target = await resolveAgentTarget(false);
+        label = target ? target.label : "الحافظة";
+    } catch { label = ""; }
+    if (label !== currentAgentLabel) {
+        currentAgentLabel = label;
+        updateStatusBar();
+    }
+}
+
+/**
+ * @param filter {} = the whole theme, {file} = one file, {file,line,code} = one finding
+ */
+async function sendToAgent(root, filter, label) {
+    const entry = roots.get(root);
+    if (!entry) return;
+    let reply;
+    try {
+        reply = await engine.request({
+            type: "agentPrompt",
+            root,
+            displayBase: displayBaseForRoot(root),
+            slug: slugForRoot(root),
+            extraIssues: entry.versionIssues,
+            ...filter,
+        });
+    } catch (e) {
+        vscode.window.showErrorMessage(`Salla Review: تعذر تجهيز المهمة — ${e.message}`);
+        return;
+    }
+    if (reply.missing || !reply.count) {
+        vscode.window.showInformationMessage(`Salla Review: لا توجد ملاحظات لإرسالها${label ? ` (${label})` : ""}.`);
+        return;
+    }
+
+    // Always on the clipboard first: most assistants expose no command that takes
+    // a prompt, so a paste is what finishes the handover.
+    await vscode.env.clipboard.writeText(reply.prompt);
+
+    const target = await resolveAgentTarget(false);
+    if (target === undefined) return; // the picker was dismissed
+
+    if (target) {
+        // Reference every affected file in the chat first — one finding or the
+        // whole theme, the same way — so the agent has the files in context.
+        const mentioned = await mentionLocations(target, reply.locations);
+        const extra = reply.locations && reply.locations.length > mentioned ? reply.locations.length - mentioned : 0;
+
+        // Assistants that accept the text as an argument get it directly; the
+        // rest are opened and focused, with the task already on the clipboard.
+        const shapes = target.acceptsPrompt
+            ? [[{ query: reply.prompt }], [reply.prompt], []]
+            : [[]];
+        for (const args of shapes) {
+            try {
+                await vscode.commands.executeCommand(target.command, ...args);
+                const sent = target.acceptsPrompt && args.length > 0;
+                const files = mentioned ? ` — ${mentioned} ملف مُشار إليه في المحادثة${extra ? ` (+${extra} لم تُضف)` : ""}` : "";
+                output.appendLine(`🤖 ${reply.count} ملاحظة → ${target.label} (${target.command})${files}${sent ? "" : " — النص في الحافظة، الصقه بـ Ctrl+V"}`);
+                vscode.window.showInformationMessage(
+                    sent
+                        ? `Salla Review: أُرسلت ${reply.count} ملاحظة إلى ${target.label}.`
+                        : mentioned
+                            ? `Salla Review: أُضيف ${mentioned} ملف إلى محادثة ${target.label} — الصق تفاصيل ${reply.count} ملاحظة بـ Ctrl+V.`
+                            : `Salla Review: ${reply.count} ملاحظة جاهزة — الصقها في ${target.label} بـ Ctrl+V.`,
+                    "غيّر الوكيل"
+                ).then((p) => { if (p === "غيّر الوكيل") vscode.commands.executeCommand("sallaReview.selectAgent"); });
+                return;
+            } catch { /* try the next shape */ }
+        }
+        output.appendLine(`⚠️ تعذر تنفيذ ${target.command} — المهمة في الحافظة`);
+    }
+
+    const pick = await vscode.window.showInformationMessage(
+        `Salla Review: مهمة إصلاح ${reply.count} ملاحظة في الحافظة — الصقها في الوكيل.`,
+        "فتح كملف",
+        "اختيار وكيل"
+    );
+    if (pick === "فتح كملف") {
+        const doc = await vscode.workspace.openTextDocument({ content: reply.prompt, language: "markdown" });
+        await vscode.window.showTextDocument(doc, { preview: true });
+    } else if (pick === "اختيار وكيل") {
+        await resolveAgentTarget(true);
+    }
+}
+
+/** The theme that owns the active editor, or the only theme in the workspace */
+function activeRoot() {
+    const active = vscode.window.activeTextEditor;
+    if (active && active.document.uri.scheme === "file") {
+        const root = rootForFile(active.document.uri.fsPath);
+        if (root) return root;
+    }
+    return roots.size === 1 ? [...roots.keys()][0] : null;
+}
+
+async function pickScannedRoot(placeHolder) {
+    if (roots.size === 0) {
+        vscode.window.showWarningMessage("Salla Review: لم تُراجَع أي ثيم بعد — نفّذ «Review Themes» أولاً.");
+        return null;
+    }
+    const here = activeRoot();
+    if (here) return here;
+    const pick = await vscode.window.showQuickPick(
+        [...roots.keys()].map((r) => ({ label: slugForRoot(r), description: r, root: r })),
+        { placeHolder }
+    );
+    return pick ? pick.root : null;
+}
+
+/* =============== Findings panel (the Send to Agent buttons) =============== */
+
+/**
+ * VS Code's built-in Problems panel takes no extension buttons — there is no
+ * menu contribution point for it — so the findings are mirrored into a view of
+ * our own, next to Problems, where every row can carry a "Send to Agent" action:
+ * on a single finding, on a whole file, and on everything from the title bar.
+ *
+ * The rows are read straight back out of the DiagnosticCollection, so this view
+ * needs no state of its own and can never disagree with the Problems panel.
+ */
+const findingsChanged = new vscode.EventEmitter();
+
+const SEVERITY_ICON = [
+    ["error", "errorForeground"],
+    ["warning", "editorWarning.foreground"],
+    ["info", "editorInfo.foreground"],
+    ["question", "editorInfo.foreground"],
+];
+
+const findingsProvider = {
+    onDidChangeTreeData: findingsChanged.event,
+
+    getChildren(node) {
+        if (!node) {
+            const files = [];
+            diagnostics.forEach((uri, diags) => {
+                if (diags.length) files.push({ kind: "file", uri, diags: [...diags].sort((a, b) => a.range.start.line - b.range.start.line) });
+            });
+            files.sort((a, b) => a.uri.fsPath.localeCompare(b.uri.fsPath));
+            return files;
+        }
+        if (node.kind === "file") return node.diags.map((d) => ({ kind: "finding", uri: node.uri, diag: d }));
+        return [];
+    },
+
+    getTreeItem(node) {
+        if (node.kind === "file") {
+            const item = new vscode.TreeItem(path.basename(node.uri.fsPath), vscode.TreeItemCollapsibleState.Expanded);
+            const root = rootForFile(node.uri.fsPath);
+            const dir = path.dirname(root ? path.relative(root, node.uri.fsPath) : node.uri.fsPath);
+            item.description = `${node.diags.length}${dir && dir !== "." ? " — " + core.normalizeRel(dir) : ""}`;
+            item.resourceUri = node.uri;
+            item.iconPath = vscode.ThemeIcon.File;
+            item.contextValue = "sallaFile";
+            item.tooltip = node.uri.fsPath;
+            return item;
+        }
+        const d = node.diag;
+        const [icon, color] = SEVERITY_ICON[d.severity] || SEVERITY_ICON[3];
+        const item = new vscode.TreeItem(d.message, vscode.TreeItemCollapsibleState.None);
+        item.description = `${d.code} · Ln ${d.range.start.line + 1}`;
+        item.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
+        item.contextValue = "sallaFinding";
+        item.tooltip = new vscode.MarkdownString(`**${d.code}**\n\n${d.message}`);
+        item.command = {
+            command: "vscode.open",
+            title: "Open",
+            arguments: [node.uri, { selection: d.range }],
+        };
+        return item;
+    },
+};
+
+function refreshFindingsView() {
+    findingsChanged.fire();
+    codeLensChanged.fire();
+}
+
+/* =============== "Send to agent" button inside the editor =============== */
+
+const codeLensChanged = new vscode.EventEmitter();
+
+/**
+ * One clickable "🤖 Send to agent" above each line that has findings — the
+ * in-editor equivalent of the button in the panel.
+ */
+const agentCodeLensProvider = {
+    onDidChangeCodeLenses: codeLensChanged.event,
+    provideCodeLenses(document) {
+        if (document.uri.scheme !== "file") return [];
+        if (!getConfig(document.uri.fsPath).agentCodeLens) return [];
+        const diags = diagnostics.get(document.uri) || [];
+        if (!diags.length) return [];
+        const byLine = new Map();
+        for (const d of diags) {
+            const line = d.range.start.line;
+            if (!byLine.has(line)) byLine.set(line, []);
+            byLine.get(line).push(d);
+        }
+        const lenses = [];
+        for (const [line, list] of byLine) {
+            const one = list.length === 1;
+            lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
+                command: "sallaReview.sendFindingToAgent",
+                title: one ? `🤖 أرسل إلى الوكيل (${list[0].code})` : `🤖 أرسل ${list.length} ملاحظات إلى الوكيل`,
+                arguments: one
+                    ? [document.uri.fsPath, line + 1, list[0].code, list[0].message]
+                    : [document.uri.fsPath, line + 1],
+            }));
+        }
+        return lenses;
     },
 };
 
@@ -616,6 +1141,7 @@ function renderVersionDiags(entry) {
     const fromEngine = (diagnostics.get(uri) || []).filter((d) => d.code !== "Twilight Version");
     const all = fromEngine.concat(entry.versionDiags);
     diagnostics.set(uri, all.length ? all : undefined);
+    refreshFindingsView();
 }
 
 /* =============== Incremental refresh =============== */
@@ -910,7 +1436,10 @@ function activate(context) {
     output = vscode.window.createOutputChannel("Salla Review");
     statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
     statusItem.command = "workbench.actions.view.problems";
+    agentItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
+    agentItem.command = "sallaReview.sendAllToAgent";
 
+    extensionContext = context;
     globalStoragePath = context.globalStorageUri.fsPath;
     extensionPath = context.extensionPath;
     try { fs.mkdirSync(globalStoragePath, { recursive: true }); } catch { /* non-fatal */ }
@@ -927,10 +1456,13 @@ function activate(context) {
         diagnostics,
         output,
         statusItem,
+        agentItem,
         markerWatcher,
         { dispose: () => { for (const root of [...roots.keys()]) removeRoot(root); engine.dispose(); } },
+        // Every file kind: the rename fix is Twig-only, but "send to agent" is
+        // offered on findings in JS, CSS, twilight.json and package.json too.
         vscode.languages.registerCodeActionsProvider(
-            { pattern: "**/*.twig" },
+            { scheme: "file" },
             quickFixProvider,
             { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
         ),
@@ -944,14 +1476,64 @@ function activate(context) {
                 () => updateRaedReference(false)
             )
         ),
+        vscode.window.registerTreeDataProvider("sallaReview.findings", findingsProvider),
+        vscode.languages.registerCodeLensProvider({ scheme: "file" }, agentCodeLensProvider),
+        vscode.commands.registerCommand("sallaReview.sendFindingToAgent", (file, line, code, message) => {
+            const root = rootForFile(file);
+            if (root) sendToAgent(root, { file, line, code, message }, code);
+        }),
+        // The ✨ button on a row of the Salla Review panel: a finding or a whole file
+        vscode.commands.registerCommand("sallaReview.sendNodeToAgent", (node) => {
+            if (!node || !node.uri) return;
+            const file = node.uri.fsPath;
+            const root = rootForFile(file);
+            if (!root) return;
+            if (node.kind === "finding") {
+                const d = node.diag;
+                sendToAgent(root, { file, line: d.range.start.line + 1, code: d.code, message: d.message }, d.code);
+            } else {
+                sendToAgent(root, { file }, path.basename(file));
+            }
+        }),
+        vscode.commands.registerCommand("sallaReview.selectAgent", async () => {
+            const chosen = await resolveAgentTarget(true);
+            if (chosen) vscode.window.showInformationMessage(`Salla Review: سيتم الإرسال إلى ${chosen.label}`);
+            else if (chosen === null) vscode.window.showInformationMessage("Salla Review: سيتم نسخ المهام إلى الحافظة.");
+            refreshAgentLabel();
+        }),
+        // Opening or focusing a chat changes where the button points
+        vscode.window.tabGroups.onDidChangeTabs(() => refreshAgentLabel()),
+        vscode.commands.registerCommand("sallaReview.sendFileToAgent", async (file) => {
+            const target = file || (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri.fsPath);
+            if (!target) {
+                vscode.window.showWarningMessage("Salla Review: افتح ملفاً أولاً.");
+                return;
+            }
+            const root = rootForFile(target);
+            if (!root) {
+                vscode.window.showWarningMessage("Salla Review: هذا الملف ليس ضمن ثيم مُراجَع.");
+                return;
+            }
+            sendToAgent(root, { file: target }, path.basename(target));
+        }),
+        vscode.commands.registerCommand("sallaReview.sendAllToAgent", async () => {
+            if (roots.size === 0) await scanAll(false);
+            const root = await pickScannedRoot("اختر الثيم الذي تريد إرسال ملاحظاته إلى الوكيل");
+            if (root) sendToAgent(root, {}, slugForRoot(root));
+        }),
         vscode.commands.registerCommand("sallaReview.clear", () => {
             for (const root of [...roots.keys()]) removeRoot(root);
             diagnostics.clear();
             liveFiles.clear();
             statusItem.hide();
+            agentItem.hide();
+            refreshFindingsView();
         }),
         vscode.workspace.onDidChangeConfiguration((e) => {
-            if (e.affectsConfiguration("sallaReview")) configCache.clear();
+            if (e.affectsConfiguration("sallaReview")) {
+                configCache.clear();
+                codeLensChanged.fire(); // agentCodeLens may have been toggled
+            }
         }),
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
             configCache.clear();
@@ -982,6 +1564,7 @@ function activate(context) {
         })
     );
 
+    refreshAgentLabel();
     if (getConfig().scanOnStartup) {
         setTimeout(() => scanAll(false), 1500);
     }

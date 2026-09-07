@@ -844,11 +844,12 @@ x
     assert(runCli(theme, [...quiet, "--fail-on", "error"]) === 1, "fail-on error: خروج 1 عند وجود خطأ (تعارض دمج)");
     cleanup();
 
-    // Warning-only theme (document.cookie is a warning-severity finding)
+    // Warning-only theme (a sensitive-looking storage key is warning severity;
+    // document.cookie is an error since checklist §5 forbids it outright)
     const w = makeTheme({
         "twilight.json": '{"name":"warn"}',
         "public/ok.js": "// built",
-        "src/assets/js/c.js": "const v = document.cookie;",
+        "src/assets/js/c.js": "localStorage.setItem('auth_token', 'abc');",
     });
     assert(runCli(w.theme, [...quiet, "--fail-on", "error"]) === 0, "fail-on error: التحذير وحده لا يفشل");
     assert(runCli(w.theme, [...quiet, "--fail-on", "warning"]) === 1, "fail-on warning: التحذير يفشل");
@@ -1183,6 +1184,128 @@ console.log("\n3.14) بلوكات set والماكرو والملفات المُ
     cleanup();
 }
 
+/* ====== 3.17) Salla publishing acceptance checklist ====== */
+
+console.log("\n3.17) قائمة اعتماد نشر الثيم:");
+{
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": '{"name":"cl"}',
+        "src/views/layouts/master.twig": `<salla-scopes></salla-scopes>
+{% include 'components/header/header.twig' %}
+{% include 'components/does-not-exist.twig' %}
+{% extends 'layouts/missing-base.twig' %}`,
+        "src/views/components/header/header.twig": "<header><salla-cart-summary></salla-cart-summary><salla-user-menu></salla-user-menu></header>",
+        "src/views/components/product/card.twig": "<div>{% if x %}{% endif %}</div>\n<script>salla.product.getDetails(product.id).then(render);</script>",
+        "src/views/pages/index.twig": `<salla-products-slider source="selected" source-value="[{{ products|map(p => p.id)|join(',') }}]"></salla-products-slider>
+<salla-products-list source="{{ s.source }}" source-value="{{ s.source_value }}"></salla-products-list>
+<salla-products-list source="{{ s.source }}" limit="{{ s.limit }}" source-value="{{ s.source_value|json_encode }}"></salla-products-list>`,
+        "src/assets/js/cookie.js": "const v = document.cookie;",
+    });
+    const base = { raedParity: false, nodeSyntaxCheck: false, requiredHooks: false, sizeCheck: false, structureCheck: false, colorCheck: false, cssVarCheck: false, twilightManifestCheck: false, uiTextCheck: false };
+    const { issues } = core.analyzeTheme(theme, base);
+    const ofType = (t) => issues.filter((i) => i.type === t);
+    const descHas = (t, s) => ofType(t).some((i) => (i.desc || "").includes(s));
+
+    // §7 — every include/embed/extends must resolve
+    const missing = ofType("Missing Template");
+    assert(missing.length === 2, `المراجع المكسورة فقط تُبلَّغ (${missing.length}) — البند 7`);
+    assert(descHas("Missing Template", "components/does-not-exist.twig") && descHas("Missing Template", "layouts/missing-base.twig"),
+        "include و extends المكسوران يُرصدان");
+    assert(!descHas("Missing Template", "header/header.twig"), "المرجع الصحيح لا يُبلَّغ");
+    assert(missing.every((i) => core.issueSeverity(i) === "error"), "المرجع المكسور = خطأ (صفحة فارغة)");
+
+    // §9 — no getDetails() while a list renders
+    const perf = ofType("Product Card Performance");
+    assert(perf.length === 1 && perf[0].file.endsWith("card.twig"), "استدعاء getDetails داخل بطاقة المنتج يُرصد — البند 9");
+
+    // §8 — source / limit / json_encode on both list and slider
+    assert(descHas("Twilight Components", "salla-products-slider يبني source-value يدوياً"), "map/join في السلايدر يبقى خطأ");
+    assert(descHas("Twilight Components", "salla-products-list: مرّر source-value عبر json_encode"), "قائمة المنتجات بلا json_encode تُرصد");
+    assert(ofType("Twilight Components").filter((i) => (i.desc || "").includes("بلا خاصية limit")).length === 2,
+        "غياب limit يُرصد في السلايدر والقائمة");
+    assert(!issues.some((i) => i.line === 3 && i.file.endsWith("index.twig")), "المكوّن المكتوب بالشكل الصحيح لا يُبلَّغ");
+
+    // §3 — master.twig carries the modals/search/toast, not the header
+    for (const comp of ["salla-offer-modal", "salla-login-modal", "salla-search", "salla-add-product-toast"]) {
+        assert(ofType("Twilight Components").some((i) => (i.desc || "").includes(`<${comp}>`) && i.file.endsWith(path.join("layouts", "master.twig"))),
+            `${comp} مطلوب في master.twig`);
+    }
+    // Pages the checklist calls "as applicable" are silent when the theme lacks them
+    assert(!descHas("Twilight Components", "salla-wallet") && !descHas("Twilight Components", "salla-notifications"),
+        "صفحات «حسب الحاجة» غير الموجودة لا تُطالَب بمكوّناتها");
+
+    // §5 — document.cookie is forbidden outright
+    assert(ofType("Security").some((i) => (i.desc || "").includes("document.cookie") && core.issueSeverity(i) === "error"),
+        "document.cookie = خطأ (البند 5)");
+    cleanup();
+}
+{
+    // §1 + §6 — a private submission has a 2 MB limit and softer text rules
+    const files = {
+        "twilight.json": '{"name":"vis"}',
+        "src/views/pages/a.twig": "<p>نص واجهة ثابت</p>",
+        "public/ok.js": "// built",
+    };
+    const base = { raedParity: false, nodeSyntaxCheck: false, requiredHooks: false, requiredComponents: false, structureCheck: false, colorCheck: false, cssVarCheck: false, twilightManifestCheck: false };
+    const { theme, cleanup } = makeTheme(files);
+    fs.writeFileSync(path.join(theme, "big.png"), Buffer.alloc(1_500_000, 7));
+
+    const pub = core.analyzeTheme(theme, base).issues;
+    const priv = core.analyzeTheme(theme, { ...base, themeVisibility: "private" }).issues;
+    assert(pub.some((i) => i.type === "Theme Size"), "ثيم عام: تجاوز 1 MB يُبلَّغ");
+    assert(!priv.some((i) => i.type === "Theme Size"), "ثيم خاص: 1.5 MB ضمن حد 2 MB");
+    assert(pub.some((i) => i.type === "UI hard-coded text" && core.issueSeverity(i) === "error"), "ثيم عام: النص الثابت خطأ");
+    assert(priv.some((i) => i.type === "UI hard-coded text" && core.issueSeverity(i) === "warning"), "ثيم خاص: النص الثابت تحذير");
+    cleanup();
+}
+
+/* ====== 3.16) Rejected wording outside code + salla-search in master ====== */
+
+console.log("\n3.16) عبارات التفاعل الوهمي في twilight.json وملفات الترجمة:");
+{
+    const { theme, cleanup } = makeTheme({
+        // The real rejections quoted twilight.json and ar.json, never a template
+        "twilight.json": JSON.stringify({
+            name: "fake",
+            settings: [
+                { id: "live_viewers_enabled", label: "تفعيل العدّاد", type: "boolean" },
+                { id: "viewers_text", label: "يشاهد هذا المنتج الآن", type: "string" },
+                { id: "viewed_products", label: "المنتجات المشاهدة", type: "boolean" },
+                { id: "reviewers_count", label: "عدد المقيّمين", type: "number" },
+            ],
+        }, null, 2),
+        "locales/ar.json": '{\n  "product": {\n    "viewers": "شخص يشاهد هذا المنتج"\n  }\n}',
+        "locales/en.json": '{\n  "product": {\n    "viewers": "people are watching this product"\n  }\n}',
+        // A conflict marker in JSON — json files were never scanned before either
+        "locales/fr.json": '{\n<<<<<<< HEAD\n  "a": 1\n=======\n  "a": 2\n>>>>>>> b\n}',
+        // Generated lockfiles must stay out of the scan
+        "package-lock.json": JSON.stringify({ lockfileVersion: 3, note: "يشاهد هذا المنتج" }),
+        "src/views/layouts/master.twig": "<salla-scopes></salla-scopes>",
+        "src/views/components/header/header.twig": "<header><salla-search></salla-search></header>",
+    });
+    const base = { raedParity: false, nodeSyntaxCheck: false, requiredHooks: false, sizeCheck: false, structureCheck: false, colorCheck: false, cssVarCheck: false, twilightManifestCheck: false, lockfileCheck: false };
+    const { issues } = core.analyzeTheme(theme, base);
+    const fake = issues.filter((i) => i.type === "Misleading UX (Social Proof/Urgency)");
+    const at = (name) => fake.filter((i) => i.file.endsWith(name));
+
+    assert(at("twilight.json").some((i) => core.issueSeverity(i) === "error"), "العبارة داخل twilight.json تُرصد (سبب رفض فعلي)");
+    assert(at("ar.json").some((i) => core.issueSeverity(i) === "error"), "العبارة داخل ملف الترجمة العربي تُرصد");
+    assert(at("en.json").some((i) => core.issueSeverity(i) === "error"), "الصيغة الإنجليزية تُرصد أيضاً");
+    assert(at("twilight.json").some((i) => (i.desc || "").includes("مُعرّف")), "مُعرّف عدّاد المشاهدين (live_viewers_enabled) يُرصد");
+    assert(!fake.some((i) => (i.lines[i.line - 1] || "").includes("viewed_products")), "viewed_products (ميزة مشروعة) لا تُرصد");
+    assert(!fake.some((i) => (i.lines[i.line - 1] || "").includes("reviewers_count")), "reviewers_count لا تُرصد");
+    assert(!issues.some((i) => i.file.endsWith("package-lock.json")), "ملفات القفل المولَّدة خارج الفحص");
+    assert(issues.some((i) => i.type === "Merge Conflict" && i.file.endsWith("fr.json")), "علامات التعارض داخل ملفات JSON تُرصد");
+
+    // Webview mode hides the header: salla-search has to be in master.twig
+    const comps = core.analyzeTheme(theme, { ...base, requiredComponents: true }).issues
+        .filter((i) => i.type === "Twilight Components" && (i.desc || "").includes("salla-search"));
+    assert(comps.length === 1 && comps[0].file.endsWith(path.join("layouts", "master.twig")),
+        "salla-search مطلوب في master.twig لا في header.twig");
+    assert((comps[0].desc || "").includes("Webview"), "الرسالة تشرح سبب اشتراط master.twig");
+    cleanup();
+}
+
 /* ============== 3.15) Lockfile in sync with package.json ============== */
 
 console.log("\n3.15) تطابق ملف القفل مع package.json:");
@@ -1380,6 +1503,49 @@ async function testEngine() {
         core.refreshFilesInState(many, files);
         assert(core.stateIssues(one).map(key).sort().join("\n") === core.stateIssues(many).map(key).sort().join("\n"),
             "refreshFilesInState (تمريرة واحدة للفحوصات المشتركة) = تحديث الملفات فرادى");
+    }
+
+    // "Send to agent": the task text is built where the findings and their code
+    // context live, so the editor never needs the file contents.
+    {
+        const a = path.join(theme, "src", "views", "pages", "a.twig");
+        const all = await eng.handle({ type: "agentPrompt", root: theme, displayBase: theme, slug: "w" });
+        assert(all.count > 1 && all.prompt.includes("# Fix Salla theme review findings"), "مهمة الوكيل تُبنى لكل الثيم");
+        assert(all.prompt.includes("`src/views/pages/a.twig`:1"), "المسار النسبي ورقم السطر في المهمة");
+        assert(all.prompt.includes("**How to fix:**") && all.prompt.includes("```twig"),
+            "المهمة تتضمن إرشاد الإصلاح ومقتطف الكود");
+        assert(!all.prompt.includes(theme), "المهمة لا تسرّب المسارات المطلقة");
+
+        const one = await eng.handle({ type: "agentPrompt", root: theme, displayBase: theme, file: a });
+        assert(one.count === 1 && one.prompt.includes("a.twig") && !one.prompt.includes("master.twig"),
+            "التصفية حسب الملف تُرسل ملاحظاته فقط");
+
+        // Two findings share master.twig:1 — the diagnostic message picks the exact one
+        const masterAll = await eng.handle({ type: "agentPrompt", root: theme, displayBase: theme, file: master });
+        const target = core.stateIssues(eng.roots.get(theme).state).find((i) => i.file === master && i.type === "Twig Naming");
+        const exact = await eng.handle({
+            type: "agentPrompt", root: theme, displayBase: theme, file: master,
+            line: target.line, code: "Twig Naming", message: core.diagnosticFieldsFor(target).message,
+        });
+        assert(exact.count === 1 && exact.count <= masterAll.count, `رسالة التشخيص تحدد الملاحظة المقصودة بدقة (${exact.count})`);
+
+        // Locations for @-mentioning the files in the agent's chat: one per file,
+        // at its first finding — "send all" mentions all of them, like "send one".
+        assert(all.locations.length === 3 && all.locations.every((l) => l.line >= 1),
+            `إرسال الكل يعطي مرجعاً لكل ملف (${all.locations.length})`);
+        assert(new Set(all.locations.map((l) => l.file)).size === all.locations.length, "لا تكرار لملف في المراجع");
+        assert(one.locations.length === 1 && one.locations[0].file === a, "إرسال ملاحظة واحدة يعطي مرجعاً واحداً لملفها");
+        const masterLoc = all.locations.find((l) => l.file === master);
+        assert(masterLoc && masterLoc.line === Math.min(...core.stateIssues(eng.roots.get(theme).state).filter((i) => i.file === master).map((i) => i.line)),
+            "مرجع الملف يشير إلى أول ملاحظة فيه");
+
+        const none = await eng.handle({ type: "agentPrompt", root: theme, displayBase: theme, file: path.join(theme, "nope.twig") });
+        assert(none.count === 0 && none.prompt === "" && none.locations.length === 0, "ملف بلا ملاحظات = لا مهمة ولا مراجع");
+        assert((await eng.handle({ type: "agentPrompt", root: theme + "x" })).missing === true, "جذر غير معروف → missing");
+
+        // Every finding type the engine can emit has fix guidance for the agent
+        const missing = [...core.ERROR_TYPES].filter((t) => !core.FIX_GUIDANCE[t]);
+        assert(missing.length === 0, `كل أنواع الأخطاء لديها إرشاد إصلاح (ناقص: ${missing.join(", ") || "لا شيء"})`);
     }
 
     const rep = await eng.handle({ type: "report", root: theme, slug: "w", displayBase: theme, raedParity: false, extraIssues: [] });

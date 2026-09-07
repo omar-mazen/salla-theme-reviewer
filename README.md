@@ -11,6 +11,7 @@ turns the same checks into commit, push, and pull-request gates for your whole t
 > review feedback, so you can compare findings one-to-one with official rejection notes.
 
 - ⚡ Non-blocking: the whole analysis runs on a dedicated worker thread — the editor, the Git view, and other extensions never wait for it. Saving a file re-checks it in a few milliseconds and only the files whose findings changed are updated in the Problems panel (live as-you-type checking available via `sallaReview.runOnType`). Files changed outside the editor (an AI agent, `git checkout`, a formatter run in the terminal) are re-checked automatically — no reload needed. Timings for every scan and refresh are logged in the **Salla Review** output channel. Theme discovery uses the workspace search, so folders hidden by `files.exclude` are not scanned.
+- 🤖 Send to Agent: a `✨ أرسل N إلى الوكيل` button in the status bar sends the whole theme in one click; the **Salla Review** panel (next to Problems) adds a ✨ button on every finding and every file, and each finding in the editor gets one above its line. The task carries the finding, the exact fix for that check, and the surrounding code, and goes to **whichever chat you have open** — the focused one wins, detected from the window itself, nothing to pick (the status bar button names its destination, and **Select AI Agent** pins one or returns to automatic). Copilot Chat receives the text directly; Claude Code has no command that accepts a prompt, so its input is focused with the task on the clipboard (`Ctrl+V`). It is always copied to the clipboard too, so the Claude Code CLI in a terminal is one paste away
 - 📴 Private: everything runs locally; internet is used only for the npm version check and reference updates
 - 🧩 Works with classic themes (`twilight.json`) and component bundles (`twilight-bundle.json`)
 
@@ -21,6 +22,10 @@ turns the same checks into commit, push, and pull-request gates for your whole t
 1. Open your theme folder in VS Code — the extension activates automatically.
 2. Open the **Problems** panel (`Ctrl+Shift+M`) and click any finding to jump to its line.
 3. Save a file — it is re-checked instantly.
+   Stuck on a finding? Open the **Salla Review** panel next to Problems and press the ✨
+   button on the finding, on the file, or on the title bar to send everything — or click
+   **🤖 أرسل إلى الوكيل** above the line in the editor. The first send asks which AI
+   extension to use and remembers it.
 4. Before submitting: `Ctrl+Shift+P` → **Salla Review: Generate Report** for a shareable
    Markdown report in the reviewers' own format.
 
@@ -44,15 +49,16 @@ review, 🔵 is advisory.
 | 🔴 | **Block balance** — `{% if %}` / `{% for %}` / `{% macro %}`… left unclosed, closed without an opener, or mismatched (`endfor` closing an `if`) |
 | 🔴 | **Variable naming** — Twig variables must be lower-case snake_case (`sectionId` → `section_id`); checked at `{% set %}`, `{% for %}` targets, and `{% macro %}` arguments, with a Quick Fix that renames across the file. A macro's own name is a 🔵 recommendation only |
 | 🔴 | **Unsafe division** — dividing by a `|length`-derived variable with no `max(1, x)` or `{% if %}` guard (crashes the page on empty lists) |
-| 🔴 | **Merge conflict markers** — unresolved `<<<<<<<` in any scanned source file (`public/` is never scanned) |
+| 🔴 | **Merge conflict markers** — unresolved `<<<<<<<` in any scanned source file, JSON included (`public/` is never scanned) |
 
 ### Structure & platform requirements
 | | Check |
 |---|---|
 | 🔴 | **salla-scopes placement** — must appear exactly once, in `master.twig` |
 | 🔴 | **Required hooks** — the 8 hooks Salla demands in product and page templates |
-| 🔴 | **Required components** — the 15 `salla-*` components Salla expects (user menu, cart coupons, order buttons, …), each in the file it belongs to: the reviewer reads that file, so a component reached only through an `{% include %}` does not count |
+| 🔴 | **Required components** — the 15 `salla-*` components Salla expects, each in the file it belongs to: the reviewer reads that file, so a component reached only through an `{% include %}` does not count. `salla-search` must be in `layouts/master.twig` — Webview mode hides the header/footer |
 | 🔴 | **Theme structure** — the `public/` build output must exist in the repository |
+| 🔴 | **Broken template references** — every static `{% include %}` / `{% embed %}` / `{% extends %}` must point at a `.twig` file that exists, or the page renders empty |
 | 🔴 | **Twilight package versions** — `@salla.sa/twilight*` must be within 5 releases of the npm latest |
 | 🔴 | **Lockfile in sync** — `pnpm-lock.yaml` / `package-lock.json` / `yarn.lock` must match the versions in `package.json`. Bumping a package without re-running the install fails every CI install with `ERR_PNPM_OUTDATED_LOCKFILE` (`--frozen-lockfile` is the CI default) |
 
@@ -64,7 +70,7 @@ review, 🔵 is advisory.
 ### Security & policy
 | | Check |
 |---|---|
-| 🔴/🟡 | **Security** — requests to non-Salla domains (error); `document.cookie` and sensitive storage keys (warnings for review) |
+| 🔴/🟡 | **Security** — requests to non-Salla domains and any `document.cookie` use (errors); sensitive storage keys (warnings for review) |
 | 🔴 | **Merchant custom code** — settings fields or injections that let the merchant run raw JS/CSS/HTML (automatic rejection) |
 | 🔴 | **Fake engagement** — live-viewer/purchase counters Salla explicitly rejects |
 
@@ -74,7 +80,8 @@ review, 🔵 is advisory.
 | 🔴 | **JS syntax** and **CSS/SCSS brace balance** (brace balance off by default — `sallaReview.checks.cssBraces`) |
 | 🟡 | **CSS variables** — defined but never used, or used but never defined (definitions in Twig, CSS, and JS all count). Off by default — `sallaReview.checks.cssVariables` |
 | 🔵 | **Hardcoded colors** — HEX values and Tailwind palette classes that should come from theme settings, including the defaults inside `theme.settings.get('id', '#fff')` and `\|default('#fff')`. Off by default — `sallaReview.checks.colors` |
-| 🟡 | **Theme size** — estimated compressed size vs. Salla's 1 MB limit |
+| 🟡 | **Theme size** — estimated compressed size vs. Salla's limit (1 MB public, 2 MB private — set `sallaReview.themeVisibility`) |
+| 🟡 | **Product card performance** — `salla.product.getDetails()` inside a card or list template fires one request per card; Salla allows it only after a Quick View or a click |
 
 Bundle projects additionally get: multilanguage fields without a `localizedString` resolver,
 `console.log` in production code, `unsafeHTML`, missing `dist/`, and missing `vite.config`.
@@ -177,6 +184,9 @@ generate, and whether `error`, `warning`, or `any` findings block.
 | **Salla Review: Edit Custom Rules** | Create/open the theme's own rules file |
 | **Salla Review: Setup Git & CI Checks** | Scaffold the commit/push/merge gates |
 | **Salla Review: Update Raed Reference** | Refresh the theme-raed reference from GitHub now |
+| **Salla Review: Send All Findings to AI Agent** | Hand every finding in the theme to your assistant as a ready fix task |
+| **Salla Review: Select AI Agent** | Choose which installed AI extension the ✨ buttons deliver to |
+| **Salla Review: Send This File's Findings to AI Agent** | The same, limited to the active file |
 | **Salla Review: Clear Problems** | Remove all diagnostics |
 
 ---
