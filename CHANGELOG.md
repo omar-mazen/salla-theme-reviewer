@@ -18,6 +18,22 @@ and the developer only presses Enter. The file is added to
 clipboard copy is still made for pasting into a terminal. Copilot Chat is
 unchanged: it takes the prompt as a command argument.
 
+### A whole-theme send no longer opens every affected file
+
+A mention is built from the *focused* editor, so each one had to open its file
+to put the cursor on the finding — sending a whole theme flashed one editor
+after another. The task file already names every file with its line and quotes
+its code, so those extra mentions bought nothing: only a single-file send still
+mentions its file. Set `sallaReview.mentionAffectedFiles` to `true` to mention
+them all again.
+
+### The Send to Agent messages are in English
+
+The status bar button, the lightbulb and CodeLens actions, the agent picker and
+every notification along the handover now read in English, matching the command
+titles in the palette. The findings themselves stay in Arabic — they quote what
+Salla's reviewers write.
+
 ## 1.8.1
 
 ### False positives found by testing against 20 shipped themes

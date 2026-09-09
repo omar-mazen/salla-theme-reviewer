@@ -54,6 +54,7 @@ let remembered = undefined;
 let workspaceFolder = null;   // what getWorkspaceFolder answers
 let executed = [];            // commands run through executeCommand
 let openedEditors = [];       // editors handed out by showTextDocument
+let mentionAffected = false;  // sallaReview.mentionAffectedFiles
 
 const noop = () => {};
 const vscodeStub = {
@@ -63,7 +64,11 @@ const vscodeStub = {
     },
     extensions: { get all() { return extensions; } },
     workspace: {
-        getConfiguration: () => ({ get: (key, def) => (key === "agentCommand" ? configured : def) }),
+        getConfiguration: () => ({ get: (key, def) => (
+            key === "agentCommand" ? configured
+                : key === "mentionAffectedFiles" ? mentionAffected
+                    : def
+        ) }),
         createFileSystemWatcher: () => ({ onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose: noop }),
         onDidChangeConfiguration: noop, onDidChangeWorkspaceFolders: noop, onDidSaveTextDocument: noop,
         onDidChangeTextDocument: noop, onDidCloseTextDocument: noop, textDocuments: [], workspaceFolders: [],
@@ -130,11 +135,12 @@ const ext = new Module("salla-extension");
 ext._compile(
     fs.readFileSync(extPath, "utf8") +
     "\nmodule.exports.__test = { detectAgents, resolveAgentTarget, mentionLocations, writeAgentTask, AGENT_TASK_REL," +
-    " setContext: (c) => { extensionContext = c; } };\n",
+    " mentionableLocations, configCache, setContext: (c) => { extensionContext = c; } };\n",
     extPath
 );
 const { detectAgents, resolveAgentTarget, setContext } = ext.exports.__test;
 const { mentionLocations, writeAgentTask, AGENT_TASK_REL } = ext.exports.__test;
+const { mentionableLocations, configCache } = ext.exports.__test;
 
 setContext({ globalState: { get: () => remembered, update: async (_k, v) => { remembered = v; } } });
 
@@ -240,6 +246,21 @@ function scenario(exts, cmds, onScreen) {
         "ملف المهمة يُشار إليه أولاً وبلا سطر محدّد (@path)");
     assert(!openedEditors[1].selection.isEmpty && openedEditors[1].selection.start.line === 2,
         "ملف الملاحظة يُشار إليه عند سطرها");
+
+    // Every extra mention opens an editor, and the task file already names each
+    // file with its line — so a whole-theme send stops flashing dozens of tabs.
+    const many = [{ file: twig, line: 3 }, { file: path.join(base, "b.twig"), line: 9 }, { file: path.join(base, "c.js"), line: 1 }];
+    configCache.clear();
+    assert(mentionableLocations(themeRoot, many, true).length === 0,
+        "الإرسال الكامل لا يفتح كل ملف — ملف المهمة يكفي");
+    assert(mentionableLocations(themeRoot, [many[0]], true).length === 1,
+        "إرسال ملف واحد يظل يشير إلى ملفه");
+    assert(mentionableLocations(themeRoot, many, false).length === 3,
+        "وكيل يقبل النص (Copilot) — لا ملف مهمة، تُشار كل الملفات");
+    mentionAffected = true; configCache.clear();
+    assert(mentionableLocations(themeRoot, many, true).length === 3,
+        "mentionAffectedFiles=true يعيد السلوك القديم");
+    mentionAffected = false; configCache.clear();
 
     fs.rmSync(base, { recursive: true, force: true });
     workspaceFolder = null;

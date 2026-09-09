@@ -77,6 +77,7 @@ function readConfig(scopeUri) {
     return {
         runOnSave: cfg.get("runOnSave", true),
         runOnType: cfg.get("runOnType", false),
+        mentionAffectedFiles: cfg.get("mentionAffectedFiles", false),
         scanOnStartup: cfg.get("scanOnStartup", true),
         raedAutoUpdateDays: cfg.get("raedAutoUpdateDays", 7),
         ci: {
@@ -370,8 +371,8 @@ function updateStatusBar() {
     // The one-click "hand everything to the agent" button — visible whenever
     // there is something to hand over, wherever the user is in the editor.
     if (total > 0) {
-        agentItem.text = `$(sparkle) أرسل ${total} إلى ${currentAgentLabel || "الوكيل"}`;
-        agentItem.tooltip = `Salla Review: إرسال كل الملاحظات (${total}) إلى ${currentAgentLabel || "وكيل الذكاء الاصطناعي"}\nلتغيير الوجهة: Salla Review: Select AI Agent`;
+        agentItem.text = `$(sparkle) Send ${total} to ${currentAgentLabel || "agent"}`;
+        agentItem.tooltip = `Salla Review: send all ${total} findings to ${currentAgentLabel || "the AI agent"}\nTo change the destination: Salla Review: Select AI Agent`;
         agentItem.show();
     } else {
         agentItem.hide();
@@ -414,7 +415,7 @@ const quickFixProvider = {
         // retyping what it says or where it is.
         for (const d of ours) {
             const action = new vscode.CodeAction(
-                `🤖 أرسل هذه الملاحظة (${d.code}) إلى الوكيل لإصلاحها`,
+                `🤖 Send this finding (${d.code}) to the agent to fix`,
                 vscode.CodeActionKind.QuickFix
             );
             action.diagnostics = [d];
@@ -427,7 +428,7 @@ const quickFixProvider = {
         }
         if (ours.length > 1) {
             const action = new vscode.CodeAction(
-                `🤖 أرسل كل ملاحظات هذا الملف (${ours.length}) إلى الوكيل`,
+                `🤖 Send all ${ours.length} findings in this file to the agent`,
                 vscode.CodeActionKind.QuickFix
             );
             action.command = {
@@ -631,7 +632,7 @@ async function resolveAgentTarget(force) {
             if (registered.has(configured)) {
                 return agents.find((a) => a.command === configured) || { command: configured, label: configured, acceptsPrompt: true };
             }
-            output.appendLine(`⚠️ sallaReview.agentCommand "${configured}" غير مسجَّل في هذه النافذة`);
+            output.appendLine(`⚠️ sallaReview.agentCommand "${configured}" is not registered in this window`);
         }
         // A pinned choice (from "Select AI Agent") wins; otherwise follow the screen
         const pinned = extensionContext.globalState.get(AGENT_STATE_KEY);
@@ -643,23 +644,23 @@ async function resolveAgentTarget(force) {
     }
 
     if (!agents.length) {
-        vscode.window.showInformationMessage("Salla Review: لم يُعثر على أي إضافة ذكاء اصطناعي في هذه النافذة — ستُنسخ المهام إلى الحافظة.");
+        vscode.window.showInformationMessage("Salla Review: no AI extension found in this window — tasks will be copied to the clipboard.");
         return null;
     }
-    const AUTO = { label: "$(wand) تلقائي — اتبع المحادثة المفتوحة", detail: agents[0] ? `الآن: ${agents[0].label}` : "", command: "__auto__" };
-    const CLIPBOARD = { label: "$(clippy) الحافظة فقط", detail: "لوكيل يعمل في الطرفية (Claude Code CLI مثلاً)", command: "" };
+    const AUTO = { label: "$(wand) Automatic — follow the open chat", detail: agents[0] ? `Now: ${agents[0].label}` : "", command: "__auto__" };
+    const CLIPBOARD = { label: "$(clippy) Clipboard only", detail: "For an agent running in the terminal (the Claude Code CLI, for example)", command: "" };
     const pick = await vscode.window.showQuickPick(
         [
             AUTO,
             ...agents.map((a) => ({
                 label: `${a.focused ? "$(circle-filled) " : a.visible ? "$(circle-outline) " : ""}${a.label}`,
-                description: a.focused ? "المحادثة المفتوحة الآن" : a.visible ? "مفتوحة" : "مثبَّتة فقط",
+                description: a.focused ? "chat in focus" : a.visible ? "chat open" : "installed only",
                 detail: a.detail,
                 command: a.command,
             })),
             CLIPBOARD,
         ],
-        { placeHolder: "إلى أي وكيل تُرسل ملاحظات Salla Review؟" }
+        { placeHolder: "Which agent should Salla Review findings go to?" }
     );
     if (!pick) return undefined;
     if (pick.command === "__auto__") {
@@ -699,7 +700,7 @@ async function mentionLocations(target, locations) {
             await vscode.commands.executeCommand(target.mentionCommand);
             mentioned.push(loc);
         } catch (e) {
-            output.appendLine(`⚠️ تعذّرت إضافة مرجع للملف ${loc.file}: ${e.message}`);
+            output.appendLine(`⚠️ Could not mention ${loc.file}: ${e.message}`);
         }
     }
 
@@ -710,6 +711,20 @@ async function mentionLocations(target, locations) {
         } catch { /* the original editor is gone — leave things where they are */ }
     }
     return mentioned;
+}
+
+/**
+ * Which of the affected files are worth @-mentioning alongside the task.
+ * Every mention opens its file to move the cursor there — that is the only way
+ * `insertAtMention` can see it — so a whole-theme send would flash dozens of
+ * editors for references the task file already spells out. Once the task file
+ * carries the findings, only a single-file send mentions its file; opt back in
+ * with `sallaReview.mentionAffectedFiles`.
+ */
+function mentionableLocations(root, locations, hasTaskFile) {
+    const list = locations || [];
+    if (!hasTaskFile || list.length <= 1) return list;
+    return getConfig(root).mentionAffectedFiles ? list : [];
 }
 
 /** Where the findings are written so a mention-only agent can read them */
@@ -740,7 +755,7 @@ function writeAgentTask(root, prompt) {
         fs.writeFileSync(file, prompt, "utf8");
         return file;
     } catch (e) {
-        output.appendLine(`⚠️ تعذّرت كتابة ملف المهمة: ${e.message}`);
+        output.appendLine(`⚠️ Could not write the task file: ${e.message}`);
         return null;
     }
 }
@@ -752,7 +767,7 @@ async function refreshAgentLabel() {
     let label = "";
     try {
         const target = await resolveAgentTarget(false);
-        label = target ? target.label : "الحافظة";
+        label = target ? target.label : "clipboard";
     } catch { label = ""; }
     if (label !== currentAgentLabel) {
         currentAgentLabel = label;
@@ -777,11 +792,11 @@ async function sendToAgent(root, filter, label) {
             ...filter,
         });
     } catch (e) {
-        vscode.window.showErrorMessage(`Salla Review: تعذر تجهيز المهمة — ${e.message}`);
+        vscode.window.showErrorMessage(`Salla Review: could not prepare the task — ${e.message}`);
         return;
     }
     if (reply.missing || !reply.count) {
-        vscode.window.showInformationMessage(`Salla Review: لا توجد ملاحظات لإرسالها${label ? ` (${label})` : ""}.`);
+        vscode.window.showInformationMessage(`Salla Review: nothing to send${label ? ` (${label})` : ""}.`);
         return;
     }
 
@@ -793,15 +808,18 @@ async function sendToAgent(root, filter, label) {
     if (target === undefined) return; // the picker was dismissed
 
     if (target) {
-        // Mention-only agents get the findings as a file: the task file first —
-        // so the chat carries the problem text, not just file names — then every
-        // affected file, one finding or the whole theme, the same way.
+        // Mention-only agents get the findings as a file, mentioned first, so the
+        // chat carries the problem text and not just file names. Mentioning the
+        // affected files too costs an editor flash each — the mention command
+        // reads the *focused* editor — and the task file already names every file
+        // with its line, so it is only worth it for a single file.
         const taskFile = target.acceptsPrompt ? null : writeAgentTask(root, reply.prompt);
-        const list = taskFile ? [{ file: taskFile, whole: true }, ...reply.locations] : reply.locations;
+        const locations = mentionableLocations(root, reply.locations, !!taskFile);
+        const list = taskFile ? [{ file: taskFile, whole: true }, ...locations] : locations;
         const done = await mentionLocations(target, list);
         const taskMentioned = !!taskFile && done.some((l) => l.file === taskFile);
         const mentioned = done.filter((l) => l.file !== taskFile).length;
-        const extra = Math.max(0, (reply.locations ? reply.locations.length : 0) - mentioned);
+        const extra = Math.max(0, locations.length - mentioned);
 
         // Assistants that accept the text as an argument get it directly; the
         // rest are opened and focused, with the task already on the clipboard.
@@ -812,35 +830,35 @@ async function sendToAgent(root, filter, label) {
             try {
                 await vscode.commands.executeCommand(target.command, ...args);
                 const sent = target.acceptsPrompt && args.length > 0;
-                const files = mentioned ? ` — ${mentioned} ملف مُشار إليه في المحادثة${extra ? ` (+${extra} لم تُضف)` : ""}` : "";
+                const files = mentioned ? ` — ${mentioned} file(s) mentioned${extra ? ` (+${extra} skipped)` : ""}` : "";
                 const task = taskMentioned ? ` + ${AGENT_TASK_REL}` : "";
-                const paste = sent || taskMentioned ? "" : " — النص في الحافظة، الصقه بـ Ctrl+V";
-                output.appendLine(`🤖 ${reply.count} ملاحظة → ${target.label} (${target.command})${files}${task}${paste}`);
+                const paste = sent || taskMentioned ? "" : " — task on the clipboard, paste it with Ctrl+V";
+                output.appendLine(`🤖 ${reply.count} finding(s) → ${target.label} (${target.command})${files}${task}${paste}`);
                 vscode.window.showInformationMessage(
                     sent
-                        ? `Salla Review: أُرسلت ${reply.count} ملاحظة إلى ${target.label}.`
+                        ? `Salla Review: sent ${reply.count} finding(s) to ${target.label}.`
                         : taskMentioned
-                            ? `Salla Review: ${reply.count} ملاحظة بتفاصيلها${mentioned ? ` و${mentioned} ملف` : ""} في محادثة ${target.label} — اضغط Enter للإرسال.`
+                            ? `Salla Review: ${reply.count} finding(s) with their details${mentioned ? ` and ${mentioned} file(s)` : ""} are in the ${target.label} chat — press Enter to send.`
                             : mentioned
-                                ? `Salla Review: أُضيف ${mentioned} ملف إلى محادثة ${target.label} — الصق تفاصيل ${reply.count} ملاحظة بـ Ctrl+V.`
-                                : `Salla Review: ${reply.count} ملاحظة جاهزة — الصقها في ${target.label} بـ Ctrl+V.`,
-                    "غيّر الوكيل"
-                ).then((p) => { if (p === "غيّر الوكيل") vscode.commands.executeCommand("sallaReview.selectAgent"); });
+                                ? `Salla Review: ${mentioned} file(s) added to the ${target.label} chat — paste the ${reply.count} finding(s) with Ctrl+V.`
+                                : `Salla Review: ${reply.count} finding(s) ready — paste them into ${target.label} with Ctrl+V.`,
+                    "Change agent"
+                ).then((p) => { if (p === "Change agent") vscode.commands.executeCommand("sallaReview.selectAgent"); });
                 return;
             } catch { /* try the next shape */ }
         }
-        output.appendLine(`⚠️ تعذر تنفيذ ${target.command} — المهمة في الحافظة`);
+        output.appendLine(`⚠️ ${target.command} failed — the task is on the clipboard`);
     }
 
     const pick = await vscode.window.showInformationMessage(
-        `Salla Review: مهمة إصلاح ${reply.count} ملاحظة في الحافظة — الصقها في الوكيل.`,
-        "فتح كملف",
-        "اختيار وكيل"
+        `Salla Review: a task to fix ${reply.count} finding(s) is on the clipboard — paste it into the agent.`,
+        "Open as a file",
+        "Select agent"
     );
-    if (pick === "فتح كملف") {
+    if (pick === "Open as a file") {
         const doc = await vscode.workspace.openTextDocument({ content: reply.prompt, language: "markdown" });
         await vscode.window.showTextDocument(doc, { preview: true });
-    } else if (pick === "اختيار وكيل") {
+    } else if (pick === "Select agent") {
         await resolveAgentTarget(true);
     }
 }
@@ -964,7 +982,7 @@ const agentCodeLensProvider = {
             const one = list.length === 1;
             lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
                 command: "sallaReview.sendFindingToAgent",
-                title: one ? `🤖 أرسل إلى الوكيل (${list[0].code})` : `🤖 أرسل ${list.length} ملاحظات إلى الوكيل`,
+                title: one ? `🤖 Send to agent (${list[0].code})` : `🤖 Send ${list.length} findings to agent`,
                 arguments: one
                     ? [document.uri.fsPath, line + 1, list[0].code, list[0].message]
                     : [document.uri.fsPath, line + 1],
@@ -1542,8 +1560,8 @@ function activate(context) {
         }),
         vscode.commands.registerCommand("sallaReview.selectAgent", async () => {
             const chosen = await resolveAgentTarget(true);
-            if (chosen) vscode.window.showInformationMessage(`Salla Review: سيتم الإرسال إلى ${chosen.label}`);
-            else if (chosen === null) vscode.window.showInformationMessage("Salla Review: سيتم نسخ المهام إلى الحافظة.");
+            if (chosen) vscode.window.showInformationMessage(`Salla Review: findings will go to ${chosen.label}`);
+            else if (chosen === null) vscode.window.showInformationMessage("Salla Review: tasks will be copied to the clipboard.");
             refreshAgentLabel();
         }),
         // Opening or focusing a chat changes where the button points
@@ -1563,7 +1581,7 @@ function activate(context) {
         }),
         vscode.commands.registerCommand("sallaReview.sendAllToAgent", async () => {
             if (roots.size === 0) await scanAll(false);
-            const root = await pickScannedRoot("اختر الثيم الذي تريد إرسال ملاحظاته إلى الوكيل");
+            const root = await pickScannedRoot("Pick the theme whose findings should go to the agent");
             if (root) sendToAgent(root, {}, slugForRoot(root));
         }),
         vscode.commands.registerCommand("sallaReview.clear", () => {

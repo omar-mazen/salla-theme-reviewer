@@ -192,6 +192,12 @@
             "scope": "window",
             "markdownDescription": "Command id used by **Send … to AI Agent** to hand the findings over. Leave empty to auto-detect: the VS Code chat view (`workbench.action.chat.open`) is used when available, otherwise the task is copied to the clipboard so it can be pasted into any assistant, including terminal ones such as Claude Code. Set this to your assistant's own \"open chat with prompt\" command id if it registers one — it is called with `{ query: \"<the task>\" }`. Run **Developer: Show All Commands** to find the id."
           },
+          "sallaReview.mentionAffectedFiles": {
+            "type": "boolean",
+            "default": false,
+            "scope": "resource",
+            "markdownDescription": "Also @-mention every affected file when handing findings to a mention-only assistant (Claude Code, Cline, Continue …). Each mention has to open its file to place the cursor — that is the only input `insertAtMention` reads — so a whole-theme send flashes one editor per file. Off by default: the task file (`.salla-review/agent-task.md`) already names every file with its line and its code, and a single-file send mentions its file either way."
+          },
           "sallaReview.agentCodeLens": {
             "type": "boolean",
             "default": true,
