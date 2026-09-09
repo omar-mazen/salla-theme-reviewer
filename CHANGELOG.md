@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.8.2
+
+### Send to Agent hands over the findings, not just the file names
+
+Mention-only assistants — Claude Code, Cline, Continue, Roo Code, Cody — expose
+no command that accepts text: `insertAtMention` builds `@path#line` from the
+focused editor and nothing else. So the chat received the affected files while
+the findings themselves sat on the clipboard, waiting for a `Ctrl+V` that is
+easy to miss. The agent saw file references with no task.
+
+The task is now written to `.salla-review/agent-task.md` and @-mentioned first,
+ahead of the affected files, so the conversation carries the full description of
+every finding — the problem text, the expected fix and the surrounding code —
+and the developer only presses Enter. The file is added to
+`.salla-review/.gitignore` on first use so it never reaches a commit, and the
+clipboard copy is still made for pasting into a terminal. Copilot Chat is
+unchanged: it takes the prompt as a command argument.
+
 ## 1.8.1
 
 ### False positives found by testing against 20 shipped themes

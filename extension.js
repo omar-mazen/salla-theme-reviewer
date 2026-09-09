@@ -678,23 +678,26 @@ const MAX_MENTIONS = 25;
  * by selecting a line and pressing alt+K. The mention command reads the focused
  * editor's selection, so each file is briefly opened and its finding line
  * selected; the editor that was in front beforehand is restored afterwards.
- * @returns {Promise<number>} how many files were mentioned
+ * A location marked `whole` is mentioned without a line range (empty selection).
+ * @returns {Promise<Array>} the locations that were actually mentioned
  */
 async function mentionLocations(target, locations) {
-    if (!target || !target.mentionCommand || !locations || !locations.length) return 0;
+    if (!target || !target.mentionCommand || !locations || !locations.length) return [];
     const previous = vscode.window.activeTextEditor;
     const previousSelection = previous && previous.selection;
-    let mentioned = 0;
+    const mentioned = [];
 
     for (const loc of locations.slice(0, MAX_MENTIONS)) {
         try {
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(loc.file));
             const line = Math.min(Math.max(0, (loc.line || 1) - 1), Math.max(0, doc.lineCount - 1));
             const editor = await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
-            editor.selection = new vscode.Selection(line, 0, line, doc.lineAt(line).text.length);
+            editor.selection = loc.whole
+                ? new vscode.Selection(0, 0, 0, 0)
+                : new vscode.Selection(line, 0, line, doc.lineAt(line).text.length);
             editor.revealRange(editor.selection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
             await vscode.commands.executeCommand(target.mentionCommand);
-            mentioned++;
+            mentioned.push(loc);
         } catch (e) {
             output.appendLine(`⚠️ تعذّرت إضافة مرجع للملف ${loc.file}: ${e.message}`);
         }
@@ -707,6 +710,39 @@ async function mentionLocations(target, locations) {
         } catch { /* the original editor is gone — leave things where they are */ }
     }
     return mentioned;
+}
+
+/** Where the findings are written so a mention-only agent can read them */
+const AGENT_TASK_REL = path.join(".salla-review", "agent-task.md");
+
+/**
+ * Mention-only assistants (Claude Code, Cline, Continue, …) expose no command
+ * that accepts text — `insertAtMention` builds `@path#line` from the focused
+ * editor and nothing else. Mentioning the affected files therefore hands the
+ * agent the code but never the findings. Writing the task to a file and
+ * mentioning that file first is what puts the problem descriptions themselves
+ * into the chat.
+ * @returns {string|null} the file's path, or null if it could not be written
+ */
+function writeAgentTask(root, prompt) {
+    try {
+        const base = displayBaseForRoot(root);
+        const dir = path.join(base, ".salla-review");
+        fs.mkdirSync(dir, { recursive: true });
+        // The vendored CI files in this folder are committed on purpose; this
+        // scratch file is not — keep it out of the developer's commits.
+        const ignore = path.join(dir, ".gitignore");
+        const current = fs.existsSync(ignore) ? fs.readFileSync(ignore, "utf8") : "";
+        if (!/^agent-task\.md\s*$/m.test(current)) {
+            fs.writeFileSync(ignore, `${current.replace(/\s*$/, "")}\nagent-task.md\n`.replace(/^\n/, ""), "utf8");
+        }
+        const file = path.join(base, AGENT_TASK_REL);
+        fs.writeFileSync(file, prompt, "utf8");
+        return file;
+    } catch (e) {
+        output.appendLine(`⚠️ تعذّرت كتابة ملف المهمة: ${e.message}`);
+        return null;
+    }
 }
 
 /** The target shown on the status bar button — refreshed when the tabs change */
@@ -757,10 +793,15 @@ async function sendToAgent(root, filter, label) {
     if (target === undefined) return; // the picker was dismissed
 
     if (target) {
-        // Reference every affected file in the chat first — one finding or the
-        // whole theme, the same way — so the agent has the files in context.
-        const mentioned = await mentionLocations(target, reply.locations);
-        const extra = reply.locations && reply.locations.length > mentioned ? reply.locations.length - mentioned : 0;
+        // Mention-only agents get the findings as a file: the task file first —
+        // so the chat carries the problem text, not just file names — then every
+        // affected file, one finding or the whole theme, the same way.
+        const taskFile = target.acceptsPrompt ? null : writeAgentTask(root, reply.prompt);
+        const list = taskFile ? [{ file: taskFile, whole: true }, ...reply.locations] : reply.locations;
+        const done = await mentionLocations(target, list);
+        const taskMentioned = !!taskFile && done.some((l) => l.file === taskFile);
+        const mentioned = done.filter((l) => l.file !== taskFile).length;
+        const extra = Math.max(0, (reply.locations ? reply.locations.length : 0) - mentioned);
 
         // Assistants that accept the text as an argument get it directly; the
         // rest are opened and focused, with the task already on the clipboard.
@@ -772,13 +813,17 @@ async function sendToAgent(root, filter, label) {
                 await vscode.commands.executeCommand(target.command, ...args);
                 const sent = target.acceptsPrompt && args.length > 0;
                 const files = mentioned ? ` — ${mentioned} ملف مُشار إليه في المحادثة${extra ? ` (+${extra} لم تُضف)` : ""}` : "";
-                output.appendLine(`🤖 ${reply.count} ملاحظة → ${target.label} (${target.command})${files}${sent ? "" : " — النص في الحافظة، الصقه بـ Ctrl+V"}`);
+                const task = taskMentioned ? ` + ${AGENT_TASK_REL}` : "";
+                const paste = sent || taskMentioned ? "" : " — النص في الحافظة، الصقه بـ Ctrl+V";
+                output.appendLine(`🤖 ${reply.count} ملاحظة → ${target.label} (${target.command})${files}${task}${paste}`);
                 vscode.window.showInformationMessage(
                     sent
                         ? `Salla Review: أُرسلت ${reply.count} ملاحظة إلى ${target.label}.`
-                        : mentioned
-                            ? `Salla Review: أُضيف ${mentioned} ملف إلى محادثة ${target.label} — الصق تفاصيل ${reply.count} ملاحظة بـ Ctrl+V.`
-                            : `Salla Review: ${reply.count} ملاحظة جاهزة — الصقها في ${target.label} بـ Ctrl+V.`,
+                        : taskMentioned
+                            ? `Salla Review: ${reply.count} ملاحظة بتفاصيلها${mentioned ? ` و${mentioned} ملف` : ""} في محادثة ${target.label} — اضغط Enter للإرسال.`
+                            : mentioned
+                                ? `Salla Review: أُضيف ${mentioned} ملف إلى محادثة ${target.label} — الصق تفاصيل ${reply.count} ملاحظة بـ Ctrl+V.`
+                                : `Salla Review: ${reply.count} ملاحظة جاهزة — الصقها في ${target.label} بـ Ctrl+V.`,
                     "غيّر الوكيل"
                 ).then((p) => { if (p === "غيّر الوكيل") vscode.commands.executeCommand("sallaReview.selectAgent"); });
                 return;

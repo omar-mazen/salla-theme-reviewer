@@ -51,16 +51,26 @@ let extensions = [];
 let tabs = { active: null, open: [] };
 let configured = "";
 let remembered = undefined;
+let workspaceFolder = null;   // what getWorkspaceFolder answers
+let executed = [];            // commands run through executeCommand
+let openedEditors = [];       // editors handed out by showTextDocument
 
 const noop = () => {};
 const vscodeStub = {
-    commands: { getCommands: async () => [...registered], registerCommand: noop, executeCommand: noop },
+    commands: {
+        getCommands: async () => [...registered], registerCommand: noop,
+        executeCommand: async (cmd) => { executed.push(cmd); },
+    },
     extensions: { get all() { return extensions; } },
     workspace: {
         getConfiguration: () => ({ get: (key, def) => (key === "agentCommand" ? configured : def) }),
         createFileSystemWatcher: () => ({ onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose: noop }),
         onDidChangeConfiguration: noop, onDidChangeWorkspaceFolders: noop, onDidSaveTextDocument: noop,
         onDidChangeTextDocument: noop, onDidCloseTextDocument: noop, textDocuments: [], workspaceFolders: [],
+        getWorkspaceFolder: () => workspaceFolder,
+        openTextDocument: async (uri) => ({
+            fileName: uri.fsPath, lineCount: 40, lineAt: () => ({ text: "a line of code" }),
+        }),
     },
     window: {
         get tabGroups() {
@@ -77,6 +87,11 @@ const vscodeStub = {
         createStatusBarItem: () => ({ show: noop, hide: noop, dispose: noop }),
         createOutputChannel: () => ({ appendLine: noop, clear: noop, dispose: noop }),
         registerTreeDataProvider: noop, activeTextEditor: undefined,
+        showTextDocument: async (doc) => {
+            const editor = { document: doc, selection: null, revealRange: noop };
+            openedEditors.push(editor);
+            return editor;
+        },
     },
     languages: {
         createDiagnosticCollection: () => ({ set: noop, delete: noop, clear: noop, get: () => [], forEach: noop, dispose: noop }),
@@ -92,6 +107,14 @@ const vscodeStub = {
     TreeItem: class { constructor(l, c) { this.label = l; this.collapsibleState = c; } },
     EventEmitter: class { constructor() { this.event = () => ({ dispose: noop }); } fire() {} },
     Range: class {}, Diagnostic: class {}, CodeLens: class {}, RelativePattern: class {}, MarkdownString: class {},
+    Selection: class {
+        constructor(sl, sc, el, ec) {
+            this.start = { line: sl, character: sc };
+            this.end = { line: el, character: ec };
+            this.isEmpty = sl === el && sc === ec;
+        }
+    },
+    TextEditorRevealType: { InCenterIfOutsideViewport: 2 },
     Uri: { file: (f) => ({ fsPath: f, scheme: "file" }) },
     env: { clipboard: { writeText: async () => {} } },
 };
@@ -106,10 +129,12 @@ const extPath = path.join(__dirname, "..", "extension.js");
 const ext = new Module("salla-extension");
 ext._compile(
     fs.readFileSync(extPath, "utf8") +
-    "\nmodule.exports.__test = { detectAgents, resolveAgentTarget, setContext: (c) => { extensionContext = c; } };\n",
+    "\nmodule.exports.__test = { detectAgents, resolveAgentTarget, mentionLocations, writeAgentTask, AGENT_TASK_REL," +
+    " setContext: (c) => { extensionContext = c; } };\n",
     extPath
 );
 const { detectAgents, resolveAgentTarget, setContext } = ext.exports.__test;
+const { mentionLocations, writeAgentTask, AGENT_TASK_REL } = ext.exports.__test;
 
 setContext({ globalState: { get: () => remembered, update: async (_k, v) => { remembered = v; } } });
 
@@ -185,6 +210,39 @@ function scenario(exts, cmds, onScreen) {
     } }], ["superai.newChat", "superai.logout"]);
     target = await resolveAgentTarget(false);
     assert(target && target.command === "superai.newChat", `وكيل غير معروف مسبقاً يُكتشف أيضاً — ${target && target.command}`);
+
+    /* ---- The findings must reach the chat, not only the file names ---- */
+    console.log("\nتسليم نص الملاحظات للوكيل:");
+
+    const os = require("os");
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "salla-agent-"));
+    workspaceFolder = { uri: { fsPath: base } };
+    const themeRoot = path.join(base, "twilight.json");
+    const PROMPT = "# Fix Salla theme review findings\n\n### 1. uiText — `src/views/x.twig`:3\n";
+
+    const taskFile = writeAgentTask(themeRoot, PROMPT);
+    assert(taskFile === path.join(base, AGENT_TASK_REL), `ملف المهمة يُكتب في ${AGENT_TASK_REL} — ${taskFile}`);
+    assert(fs.readFileSync(taskFile, "utf8") === PROMPT, "ملف المهمة يحوي نص الملاحظات كاملاً لا أسماء الملفات فقط");
+    const gitignore = path.join(base, ".salla-review", ".gitignore");
+    assert(/^agent-task\.md$/m.test(fs.readFileSync(gitignore, "utf8")), "ملف المهمة مستثنى من Git");
+    writeAgentTask(themeRoot, PROMPT);
+    assert(fs.readFileSync(gitignore, "utf8").match(/agent-task\.md/g).length === 1, "الاستثناء لا يتكرّر مع كل إرسال");
+
+    // The task file is mentioned whole (@path), the findings' files at their line
+    executed = []; openedEditors = [];
+    const twig = path.join(base, "src", "views", "x.twig");
+    const claude = { mentionCommand: "claude-vscode.insertAtMention", command: "claude-vscode.focus", label: "Claude Code" };
+    const done = await mentionLocations(claude, [{ file: taskFile, whole: true }, { file: twig, line: 3 }]);
+    assert(done.length === 2, `كل المواضع أُشير إليها — ${done.length}`);
+    assert(executed.length === 2 && executed.every((c) => c === "claude-vscode.insertAtMention"),
+        `أمر الإشارة نُفِّذ لكل موضع — ${executed.join(", ")}`);
+    assert(openedEditors[0].document.fileName === taskFile && openedEditors[0].selection.isEmpty,
+        "ملف المهمة يُشار إليه أولاً وبلا سطر محدّد (@path)");
+    assert(!openedEditors[1].selection.isEmpty && openedEditors[1].selection.start.line === 2,
+        "ملف الملاحظة يُشار إليه عند سطرها");
+
+    fs.rmSync(base, { recursive: true, force: true });
+    workspaceFolder = null;
 
     if (failures) { console.error(`\n❌ فشل ${failures} اختبار`); process.exit(1); }
     console.log("\n✅ كل اختبارات اكتشاف الوكيل ناجحة");
