@@ -2,7 +2,7 @@
   "name": "salla-theme-reviewer",
   "displayName": "Salla Theme Reviewer",
   "description": "Pre-submission review for Salla themes inside VS Code — hardcoded UI texts, Twig block balance, required Twilight hooks and components, twilight.json integrity, security, package freshness, and more. Built from Salla's internal review tool and the analysis of 123 real rejection emails.",
-  "version": "1.8.2",
+  "version": "1.9.0",
   "publisher": "omarmazen",
   "license": "MIT",
   "engines": {
@@ -383,6 +383,20 @@
             "default": true,
             "scope": "resource",
             "description": "Verify that the 15 Twilight components Salla requires (salla-user-menu, salla-cart-coupons, salla-edit-order-button, salla-next-order-coupon, and others) appear in the file each one belongs to. The reviewer reads that file itself, so a component placed in another file — or reached only through an {% include %} — does not satisfy the requirement and is reported."
+          },
+          "sallaReview.requiredLocation": {
+            "type": "string",
+            "enum": [
+              "sameFile",
+              "includedFiles"
+            ],
+            "enumDescriptions": [
+              "The hook or element must be written in the required page itself.",
+              "The hook or element may live in any template the page includes, embeds or imports (checked transitively)."
+            ],
+            "default": "sameFile",
+            "scope": "resource",
+            "markdownDescription": "Where a required hook (`sallaReview.checks.requiredHooks`) or element (`sallaReview.checks.requiredComponents`) is allowed to sit. Salla's reviewer opens the page itself, so `sameFile` is the default; switch to `includedFiles` when the theme splits a page into components it includes, and the whole `{% include %}` chain will count."
           },
           "sallaReview.checks.raedParity": {
             "type": "boolean",

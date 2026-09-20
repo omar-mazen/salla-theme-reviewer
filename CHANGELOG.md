@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.9.0
+
+### Hardcoded text inside Twig expressions is now reported
+
+`{{ theme.settings.get('back_to_top_text', "العودة للأعلى") }}` prints Arabic to
+the shopper exactly like a text node does, but the text extractor masks
+expressions before looking for text, so the fallback went unseen. String
+literals inside `{{ … }}` and `{% … %}` are now read as well, and the message
+points at the fix: pass the string through `trans()`, which takes the fixed text
+as its own fallback — `trans('common.back_to_top', "العودة للأعلى")`.
+
+Anything already inside `trans(…)`, and the `'key'|trans` filter form, is left
+alone. An expression also holds class lists, template paths, setting ids and
+date formats, so only unmistakable UI text is reported: Arabic, or an English
+phrase of two words or more starting with a capitalised word ("Back to top").
+`{{ active ? 'flex items-center' : 'hidden' }}` stays quiet.
+
+### twilight.json: numeric ranges and display conditions
+
+Two structural checks, both from fields that silently do nothing in the
+merchant's dashboard:
+
+- **`minimum` on a number / slider / range field** must be `0` or `1` — a
+  missing one leaves the slider without a track (warning), and any other value
+  is an error.
+- **`conditions` must match where their field lives.** A field outside a
+  collection reads another field directly:
+  `{ "id": "floating_reels_enabled", "operation": "=", "value": true }`. Inside
+  a collection every row is evaluated on its own, so the collection and the row
+  have to be named: `{ "collection_id": "posts_collection", "value_index": ".",
+  "id": "posts_collection.add_product_s", "operation": "=", "value": true }`.
+  Using the plain shape inside a collection, `collection_id` outside one, a
+  dotted id that does not belong to its collection, an id defined nowhere in
+  `twilight.json`, or an unknown `operation` are all reported. Component fields
+  are checked the same way as settings.
+
+### Required hooks and elements may live in an included component
+
+Salla's reviewer opens the page itself, so a hook or `salla-*` element reached
+only through an `{% include %}` still does not satisfy it by default. Themes
+that split a page into components can now say so: set
+`sallaReview.requiredLocation` to `includedFiles` and the whole include / embed
+/ import chain counts, transitively. The CLI takes `--required-in-includes`,
+and a project's `.vscode/settings.json` carries the choice into the git hooks
+and CI like every other setting.
+
 ## 1.8.2
 
 ### Send to Agent hands over the findings, not just the file names

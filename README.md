@@ -42,6 +42,7 @@ review, 🔵 is advisory.
 | | Check |
 |---|---|
 | 🔴 | **Hardcoded UI texts** — user-visible strings not going through `trans()` (Twig) or `salla.lang` (JS). Catches multi-line markup, `innerHTML`/`alert`/`salla.notify`/jQuery sinks, and CSS `content:`. Attributes (`alt`, `placeholder`…), comments, `{% set x %}…{% endset %}` capture blocks, hidden elements, and `<salla-*>` markup are never reported |
+| 🔴 | **Hardcoded text inside Twig expressions** — the fallback in `{{ theme.settings.get('back_to_top_text', "العودة للأعلى") }}` or a ternary reaches the shopper just like a text node. Wrap it in `trans()`, which takes the fixed text as its own fallback: `trans('common.back_to_top', "العودة للأعلى")`. Strings inside `trans()` — and class lists, template paths, ids and date formats — are never reported |
 
 ### Twig
 | | Check |
@@ -57,6 +58,7 @@ review, 🔵 is advisory.
 | 🔴 | **salla-scopes placement** — must appear exactly once, in `master.twig` |
 | 🔴 | **Required hooks** — the 8 hooks Salla demands in product and page templates |
 | 🔴 | **Required components** — the 15 `salla-*` components Salla expects, each in the file it belongs to: the reviewer reads that file, so a component reached only through an `{% include %}` does not count. `salla-search` must be in `layouts/master.twig` — Webview mode hides the header/footer |
+| ⚙️ | Both of the above accept the page itself only. If your theme splits a page into components it includes, set `sallaReview.requiredLocation` to `includedFiles` and the whole `{% include %}` / `{% embed %}` chain counts |
 | 🔴 | **Theme structure** — the `public/` build output must exist in the repository |
 | 🔴 | **Broken template references** — every static `{% include %}` / `{% embed %}` / `{% extends %}` must point at a `.twig` file that exists, or the page renders empty |
 | 🔴 | **Twilight package versions** — `@salla.sa/twilight*` must be within 5 releases of the npm latest |
@@ -66,6 +68,8 @@ review, 🔵 is advisory.
 | | Check |
 |---|---|
 | 🔴/🟡 | **Manifest integrity** — every field has a valid id; component paths point to real files; settings defined but never used; `theme.settings.get()` of undefined settings; component fields never used in their component |
+| 🔴/🟡 | **Numeric & slider ranges** — a `number` / `slider` / `range` field must declare a `minimum`, and it must be `0` or `1` |
+| 🔴 | **Display conditions** — a `conditions` entry must match where its field lives. Outside a collection: `{ "id": "floating_reels_enabled", "operation": "=", "value": true }`. Inside one, every row is evaluated on its own, so the collection and the row have to be named: `{ "collection_id": "posts_collection", "value_index": ".", "id": "posts_collection.add_product_s", "operation": "=", "value": true }`. Mixed-up shapes, unknown ids and missing operations are reported |
 
 ### Security & policy
 | | Check |

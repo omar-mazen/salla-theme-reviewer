@@ -13,6 +13,8 @@
  *   --no-report                           Do not write Markdown reports (hooks mode)
  *   --exclude "p1,p2"                     Exclude path patterns (same forms as the settings)
  *   --no-network                          Skip the npm version check
+ *   --required-in-includes                A required hook/component counts when the page
+ *                                         reaches it through an {% include %}
  *   --no-<check>                          Disable a specific check (see README)
  *
  * Per-project configuration: if <theme>/.vscode/settings.json contains
@@ -171,6 +173,11 @@ function optsForRoot(root) {
     }
     if (typeof settings["sallaReview.customRulesFile"] === "string") {
         opts.customRulesFile = settings["sallaReview.customRulesFile"];
+    }
+    // Where a required hook/component may sit: the page itself (default) or any
+    // template it includes. --required-in-includes is the flag form.
+    if (settings["sallaReview.requiredLocation"] === "includedFiles" || flags.has("--required-in-includes")) {
+        opts.requiredLocation = "includedFiles";
     }
     return opts;
 }

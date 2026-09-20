@@ -391,10 +391,129 @@ console.log("\n3.7) twilight.json الهيكلية والألوان ومتغير
     assert(descHas("ghost_setting"), "theme.settings.get لإعداد غير معرّف → بلاغ");
     assert(descHas('"bad id!"'), "id بمسافة/رمز غير مسموح → بلاغ");
     assert(descHas("حقل بدون id"), "حقل بلا id → بلاغ");
-    assert(!descHas('"coll.child"'), "أبناء المجموعات (بالنقطة) ids صالحة");
+    assert(!man.some((i) => (i.desc || "").includes("id غير صالح") && (i.desc || "").includes("coll.child")),
+        "أبناء المجموعات (بالنقطة) ids صالحة");
     assert(descHas('"home.missing"'), "مسار مكوّن لملف غير موجود → بلاغ");
     assert(descHas('"unused_field"'), "حقل مكوّن غير مستخدم في ملفه → بلاغ");
     assert(!descHas('"used_field"'), "حقل المكوّن المستخدم (component.x) لا يُبلَّغ");
+
+    cleanup();
+}
+
+/* ========= 3.71) الحقول الرقمية (minimum) وشروط العرض (conditions) ========= */
+
+console.log("\n3.71) الحقول الرقمية وشروط العرض في twilight.json:");
+{
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": JSON.stringify({
+            name: "fields-theme",
+            settings: [
+                { id: "global_pattern_opacity", type: "number", format: "slider", inputType: "range", minimum: 0, maximum: 100, step: 1 },
+                { id: "ok_min_one", type: "number", format: "slider", minimum: 1, maximum: 10 },
+                { id: "bad_min", type: "number", format: "slider", minimum: 20, maximum: 100 },
+                { id: "no_min", type: "number" },
+                { id: "floating_reels_enabled", type: "boolean" },
+                { id: "ok_condition", type: "string", conditions: [{ id: "floating_reels_enabled", value: true, operation: "=" }] },
+                { id: "ghost_condition", type: "string", conditions: [{ id: "not_defined_anywhere", value: true, operation: "=" }] },
+                { id: "collection_shape_outside", type: "string", conditions: [{ collection_id: "posts_collection", value_index: ".", id: "posts_collection.add_product_s", operation: "=", value: true }] },
+                {
+                    id: "posts_collection", type: "collection", fields: [
+                        { id: "add_product_s", type: "boolean" },
+                        { id: "inner_ok", type: "string", conditions: [{ collection_id: "posts_collection", value_index: ".", id: "posts_collection.add_product_s", operation: "=", value: true }] },
+                        { id: "inner_plain_shape", type: "string", conditions: [{ id: "add_product_s", value: true, operation: "=" }] },
+                    ],
+                },
+            ],
+        }, null, 2),
+        "src/views/pages/page.twig": "<div>{{ store.name }}</div>",
+    });
+
+    const { issues } = core.analyzeTheme(theme, {
+        raedParity: false, nodeSyntaxCheck: false, uiTextCheck: false,
+        requiredHooks: false, requiredComponents: false, sizeCheck: false, colorCheck: false, cssVarCheck: false,
+    });
+    const man = issues.filter((i) => i.type === "Twilight Manifest");
+    const about = (id, needle) => man.some((i) => (i.desc || "").includes(id) && (i.desc || "").includes(needle));
+
+    assert(!about("global_pattern_opacity", "minimum"), "minimum = 0 مقبول");
+    assert(!about("ok_min_one", "minimum"), "minimum = 1 مقبول");
+    assert(about("bad_min", "الحد الأدنى المسموح"), "minimum = 20 → بلاغ خطأ");
+    assert(man.some((i) => (i.desc || "").includes("bad_min") && i.severity === "error"), "minimum خاطئ يُرفع كخطأ");
+    assert(about("no_min", "بدون minimum"), "حقل رقمي بلا minimum → تنبيه");
+    assert(man.some((i) => (i.desc || "").includes("no_min") && i.severity === "warning"), "غياب minimum تنبيه لا خطأ");
+
+    assert(!man.some((i) => (i.desc || "").includes("ok_condition") && (i.desc || "").includes("شرط")),
+        "شرط خارج المجموعة بالصيغة الصحيحة يمر");
+    assert(about("ghost_condition", "غير معرّف"), "شرط يشير لإعداد غير معرّف → بلاغ");
+    assert(about("collection_shape_outside", "ليس داخل مجموعة"), "collection_id لحقل خارج المجموعة → بلاغ");
+    assert(about("collection_shape_outside", "value_index"), "value_index لحقل خارج المجموعة → بلاغ");
+    assert(!man.some((i) => (i.desc || "").includes("inner_ok")), "شرط داخل المجموعة بالصيغة الصحيحة يمر");
+    assert(about("inner_plain_shape", "collection_id"), "حقل داخل مجموعة بشرط بلا collection_id → بلاغ");
+    assert(about("inner_plain_shape", "posts_collection.add_product_s"), "الشرط داخل المجموعة يجب أن يحمل id بالنقطة");
+
+    cleanup();
+}
+
+/* ========= 3.72) النص الثابت داخل تعبيرات Twig ========= */
+
+console.log("\n3.72) النص الثابت داخل تعبيرات Twig:");
+{
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": JSON.stringify({ name: "expr-theme", settings: [{ id: "back_to_top_text", type: "string" }] }),
+        "src/views/pages/page.twig": [
+            "<div>",
+            "  <a>{{ theme.settings.get('back_to_top_text', \"العودة للأعلى\") }}</a>",
+            "  <b>{{ theme.settings.get('back_to_top_text', trans('common.back_to_top', \"العودة للأعلى\")) }}</b>",
+            "  <c>{{ 'common.back_to_top'|trans }}</c>",
+            "  <i class=\"{{ active ? 'flex items-center' : 'hidden' }}\"></i>",
+            "  <s>{{ sold ? 'Back to top' : '' }}</s>",
+            "  {% include 'components.header.nav' %}",
+            "  <time>{{ now|date('Y-m-d') }}</time>",
+            "</div>",
+        ].join("\n"),
+    });
+
+    const { issues } = core.analyzeTheme(theme, {
+        raedParity: false, nodeSyntaxCheck: false, requiredHooks: false, requiredComponents: false,
+        sizeCheck: false, colorCheck: false, cssVarCheck: false, twilightManifestCheck: false, templateRefCheck: false,
+    });
+    const ui = issues.filter((i) => i.type === "UI hard-coded text");
+    const seen = (t) => ui.some((i) => (i.visible || "") === t);
+
+    assert(seen("العودة للأعلى"), "نص عربي ثابت كقيمة احتياطية في تعبير → بلاغ");
+    assert(ui.filter((i) => (i.visible || "") === "العودة للأعلى").length === 1, "النص داخل trans() لا يُبلَّغ (مرة واحدة فقط)");
+    assert(seen("Back to top"), "عبارة إنجليزية في تعبير ثلاثي → بلاغ");
+    assert(!seen("flex items-center"), "قوائم الأصناف (class) لا تُبلَّغ");
+    assert(!seen("components.header.nav"), "مسارات القوالب لا تُبلَّغ");
+    assert(!seen("Y-m-d"), "صيغ التاريخ لا تُبلَّغ");
+    assert(ui.every((i) => i.line === 2 || i.line === 6), "أرقام الأسطر صحيحة داخل التعبيرات");
+
+    cleanup();
+}
+
+/* ========= 3.73) موضع الهوكس/المكوّنات المطلوبة (requiredLocation) ========= */
+
+console.log("\n3.73) موضع الهوكس والمكوّنات المطلوبة:");
+{
+    const { theme, cleanup } = makeTheme({
+        "twilight.json": JSON.stringify({ name: "loc-theme", settings: [] }),
+        "src/views/pages/page-single.twig": "{% include 'components.page.body' %}",
+        "src/views/components/page/body.twig": "{% hook 'information_page.information_page' %}\n<salla-metadata></salla-metadata>",
+    });
+    const base = {
+        raedParity: false, nodeSyntaxCheck: false, uiTextCheck: false, sizeCheck: false,
+        colorCheck: false, cssVarCheck: false, twilightManifestCheck: false, structureCheck: false,
+    };
+    const forPage = (issues, type) =>
+        issues.filter((i) => i.type === type && String(i.file).includes("page-single"));
+
+    const strict = core.analyzeTheme(theme, { ...base, requiredLocation: "sameFile" }).issues;
+    assert(forPage(strict, "Twilight Hooks").length === 1, "الافتراضي: الهوك داخل ملف مُضمَّن لا يكفي");
+    assert(forPage(strict, "Twilight Components").some((i) => i.desc.includes("salla-metadata")), "الافتراضي: المكوّن داخل ملف مُضمَّن لا يكفي");
+
+    const loose = core.analyzeTheme(theme, { ...base, requiredLocation: "includedFiles" }).issues;
+    assert(forPage(loose, "Twilight Hooks").length === 0, "includedFiles: الهوك في ملف مُضمَّن يحقق المطلوب");
+    assert(forPage(loose, "Twilight Components").length === 0, "includedFiles: المكوّن في ملف مُضمَّن يحقق المطلوب");
 
     cleanup();
 }
